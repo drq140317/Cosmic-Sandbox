@@ -28,6 +28,7 @@
   .hud .life { color: #6ee7a0; }
   .hud .warn { color: #ffb36b; }
   .hud .follow { color: #6cd2ff; }
+  .hud .save { color: #8bc4ff; }
 
   .panel {
     position: fixed; left: 10px; right: 10px; bottom: 10px;
@@ -62,6 +63,8 @@
   button.danger.active { background: #4a1c1c; border-color: #d05555; color: #ffd7d7; }
   button.bio.active { background: #14381f; border-color: #4dbf72; color: #d6ffe3; }
   button.follow.active { background: #143349; border-color: #4db7f0; color: #d6f0ff; }
+  button.save-btn { background: #14381f; border-color: #2f6d40; color: #c8f4d8; }
+  button.save-btn:hover { background: #1a4a28; border-color: #4dbf72; }
   button.dot::before {
     content: ''; display: inline-block;
     width: 8px; height: 8px; border-radius: 50%;
@@ -77,18 +80,240 @@
   .sep { width: 1px; height: 18px; background: #263040; margin: 0 2px; }
 
   .tip {
-    position: fixed; right: 12px; top: 60px; text-align: right;
+    position: fixed; right: 12px; top: 56px; text-align: right;
     color: #4f5b6b; font: 11px/1.7 ui-monospace, Menlo, Consolas, monospace;
     pointer-events: none;
     z-index: 50;
     text-shadow: 0 0 8px #000;
   }
   .tip b { color: #7a88a0; font-weight: 600; }
+
+  .save-btn-fixed {
+    position: fixed;
+    right: 12px; top: 12px;
+    z-index: 100;
+    padding: 8px 14px;
+    font: 12px/1 ui-monospace, Menlo, Consolas, monospace;
+    display: none;
+  }
+  body.in-game .save-btn-fixed { display: block; }
+
+  .modal {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.75);
+    z-index: 5000;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+  .modal.open { display: flex; }
+
+  .modal.startup {
+    background: #04050a;
+    padding: 0;
+    align-items: stretch;
+    justify-content: stretch;
+  }
+
+  .modal-content {
+    background: #0a1018;
+    border: 1px solid #1f2a3b;
+    border-radius: 14px;
+    width: 100%;
+    max-width: 480px;
+    max-height: 82vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 12px 48px rgba(0,0,0,0.7);
+    color: #c3cede;
+    font: 12px ui-monospace, Menlo, Consolas, monospace;
+  }
+
+  .modal.startup .modal-content {
+    max-width: 100%;
+    max-height: 100%;
+    border-radius: 0;
+    border: none;
+    background: transparent;
+    box-shadow: none;
+    height: 100%;
+  }
+
+  .modal-head {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid #1a2332;
+    font-size: 14px;
+    color: #e8eef6;
+    font-weight: 600;
+  }
+  .modal.startup .modal-head {
+    padding: 24px 24px 12px;
+    border-bottom: none;
+    font-size: 18px;
+    letter-spacing: 1px;
+  }
+
+  .modal-head .subtitle {
+    display: block;
+    font-size: 11px;
+    color: #4f5b6b;
+    font-weight: 400;
+    letter-spacing: 0;
+    margin-top: 4px;
+  }
+
+  .modal-head button {
+    padding: 4px 10px;
+    font-size: 14px;
+    line-height: 1;
+  }
+  .modal.startup .modal-head button { display: none; }
+
+  .save-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 80px;
+    max-height: 50vh;
+  }
+  .modal.startup .save-list {
+    max-height: none;
+    padding: 12px 24px 24px;
+    align-items: center;
+  }
+  .modal.startup .save-list > * {
+    width: 100%;
+    max-width: 480px;
+  }
+
+  .save-empty {
+    color: #4f5b6b;
+    text-align: center;
+    padding: 30px 10px;
+    font-style: italic;
+  }
+
+  .save-item {
+    background: #10151d;
+    border: 1px solid #1a2332;
+    border-radius: 10px;
+    padding: 10px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    position: relative;
+  }
+  .save-item.current {
+    border-color: #2f6d40;
+    background: #0d1a12;
+  }
+  .save-item .info {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 8px;
+  }
+  .save-item .name {
+    color: #e8eef6;
+    font-weight: 600;
+    font-size: 13px;
+    word-break: break-all;
+  }
+  .save-item.current .name { color: #c8f4d8; }
+  .save-item .meta {
+    color: #4f5b6b;
+    font-size: 10px;
+    white-space: nowrap;
+  }
+  .save-item .badge {
+    display: inline-block;
+    background: #2f6d40;
+    color: #d4ffe0;
+    font-size: 9px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    margin-left: 6px;
+    vertical-align: middle;
+    letter-spacing: .5px;
+  }
+  .save-item .acts {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .save-item .acts button {
+    padding: 6px 10px;
+    font-size: 11px;
+  }
+  .btn-load    { background: #14381f; border-color: #2f6d40; color: #c8f4d8; }
+  .btn-load:hover { background: #1a4a28; border-color: #4dbf72; }
+  .btn-export  { background: #14283a; border-color: #2c5a80; color: #c7e3ff; }
+  .btn-export:hover { background: #1c3a52; border-color: #3f7fb0; }
+  .btn-del     { background: #2a1212; border-color: #6d2f2f; color: #ffd7d7; }
+  .btn-del:hover { background: #3a1a1a; border-color: #d05555; }
+  .btn-save    { background: #1a3a28; border-color: #2f6d40; color: #c8f4d8; }
+  .btn-save:hover { background: #245038; border-color: #4dbf72; }
+
+  .modal-actions {
+    display: flex;
+    gap: 8px;
+    padding: 12px 16px;
+    border-top: 1px solid #1a2332;
+    flex-wrap: wrap;
+  }
+  .modal.startup .modal-actions {
+    border-top: none;
+    justify-content: center;
+    padding: 0 24px 32px;
+  }
+  .modal-actions button {
+    flex: 1;
+    min-width: 120px;
+    padding: 10px 12px;
+  }
+  .modal.startup .modal-actions button {
+    flex: 0 1 200px;
+  }
+
+  .toast {
+    position: fixed;
+    left: 50%; bottom: 120px;
+    transform: translateX(-50%) translateY(20px);
+    background: rgba(20, 40, 60, 0.95);
+    border: 1px solid #2c5a80;
+    color: #c7e3ff;
+    padding: 10px 18px;
+    border-radius: 10px;
+    font: 12px ui-monospace, Menlo, Consolas, monospace;
+    z-index: 6000;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .25s, transform .25s;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    max-width: 90vw;
+    text-align: center;
+  }
+  .toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+  .toast.error {
+    background: rgba(60, 20, 20, 0.95);
+    border-color: #7a2a2a;
+    color: #ffd7d7;
+  }
 </style>
 </head>
 <body>
 <canvas id="c"></canvas>
 <div class="hud" id="hud"></div>
+
+<button class="save-btn-fixed save-btn" id="btnOpenSave">💾 存档管理</button>
 
 <div class="panel">
   <div class="row">
@@ -119,6 +344,7 @@
     <label class="lbl">速度 <input id="speed" type="range" min="0.1" max="4" step="0.1" value="1"></label>
     <span class="lbl" id="speedVal">1.0×</span>
     <span class="sep"></span>
+    <button id="btnSaveQuick" class="save-btn">💾 保存</button>
     <button id="btnHabitable" class="bio" title="快捷键 H">◎ 宜居带</button>
     <button id="btnPause" title="空格">暂停</button>
     <button id="btnResetView" title="快捷键 R">重置视角</button>
@@ -133,14 +359,32 @@
   <b>键盘</b> F跟随 · Del删除选中 · Esc取消 · 方向键平移
 </div>
 
+<div class="modal" id="saveModal">
+  <div class="modal-content">
+    <div class="modal-head">
+      <div id="modalTitle">
+        选择存档
+        <span class="subtitle" id="modalSubtitle">加载一个已有的宇宙，或新建一个</span>
+      </div>
+      <button id="modalClose">✕</button>
+    </div>
+    <div class="save-list" id="saveList"></div>
+    <div class="modal-actions">
+      <button id="btnNewSave" class="btn-load">＋ 新建宇宙</button>
+      <button id="btnImportSave" class="btn-export">⬆ 导入存档</button>
+      <input type="file" id="importFile" accept=".json,application/json" style="display:none">
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
 <script>
 /* =============================================================
    宇宙模拟器 —— 恒星 / 行星 / 小行星 / 卫星 沙盒
-   · 手机触屏 + 电脑键鼠 双端友好
-   · 卫星绑定宿主：绕宿主快速旋转
-   · 小行星撞击：卫星拦截 / 生命重置或死亡
-   · 天体碰撞：小的被销毁，质量加到大的
-   · 跟随视角：选中天体，相机一直跟随
+   · 启动时进入存档页，必须加载 / 新建 / 导入才能进入游戏
+   · 「当前存档」概念：进游戏后点「保存」直接覆盖当前存档
+   · 导出使用 Web Share API + 多重降级，确保移动端能下载到本地
    ============================================================= */
 
 const canvas = document.getElementById('c');
@@ -183,6 +427,8 @@ const IMPACT_BASE_R     = 0.28;
 const IMPACT_R_PER_SIZE = 0.14;
 const SAT_INTERCEPT_PER = 0.35;
 const SAT_INTERCEPT_MAX = 0.75;
+
+const SIZE_FROM_MASS_EXP = 1 / 2.5;
 
 /* ===================== 天体类型表 ===================== */
 const STAR_TYPES = {
@@ -249,6 +495,12 @@ let showHabitableZone = false;
 let selectedBody = null;
 let impactEvents = [];
 
+/* ★ 是否已进入游戏 */
+let inGame = false;
+
+/* ★ 当前存档 id */
+let currentSaveId = null;
+
 /* ===================== 工具 ===================== */
 function getCentroid() {
   let M = 0, cx = 0, cy = 0;
@@ -266,6 +518,11 @@ function getRefPoint() {
   }
   const { x, y } = getCentroid();
   return { x: x || 0, y: y || 0 };
+}
+
+function sizeFromMass(kind, typeKey, mass) {
+  const baseMass = CATEGORIES[kind].types[typeKey].mass;
+  return Math.pow(mass / baseMass, SIZE_FROM_MASS_EXP);
 }
 
 /* ===================== 宜居带 ===================== */
@@ -534,10 +791,10 @@ function resolveCollisions(simDt) {
           }
           events.push({ x: planet.x, y: planet.y, t: 0, type: 'impact' });
           planet.m += asteroid.m;
+          planet.sizeMul = Math.min(4.0, sizeFromMass(planet.kind, planet.typeKey, planet.m));
           toRemove.add(asteroid);
         }
       } else {
-        /* 通用碰撞：小的被销毁，质量加到大的 */
         for (const s of bodies) {
           if (s.kind === 'satellite' && s.host === small && !toRemove.has(s)) {
             s.host = big;
@@ -557,7 +814,7 @@ function resolveCollisions(simDt) {
         events.push({ x: big.x, y: big.y, t: 0, type: 'impact' });
 
         big.m += small.m;
-        big.sizeMul = Math.min(3.5, big.sizeMul * Math.pow(1 + small.m / big.m, 0.10));
+        big.sizeMul = Math.min(4.0, sizeFromMass(big.kind, big.typeKey, big.m));
 
         toRemove.add(small);
       }
@@ -896,7 +1153,6 @@ function render() {
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
 
-  /* 轨迹 */
   for (const b of bodies) {
     const t = b.trail;
     const n = t.length / 2;
@@ -922,7 +1178,6 @@ function render() {
     }
   }
 
-  /* 天体 */
   for (const b of bodies) {
     const x = SX(b.x), y = SY(b.y);
     if (x < -320 || x > W + 320 || y < -320 || y > H + 320) continue;
@@ -1034,7 +1289,6 @@ function render() {
     }
   }
 
-  /* 撞击视觉事件 */
   ctx.globalCompositeOperation = 'lighter';
   for (const ev of impactEvents) {
     const x = SX(ev.x), y = SY(ev.y);
@@ -1077,7 +1331,7 @@ function render() {
   ctx.globalAlpha = 1;
 
   if (mode !== 'delete' && mode !== 'satellite' && mode !== 'follow' &&
-      mouseX >= 0 && !isGesturing) {
+      mouseX >= 0 && !isGesturing && inGame) {
     ctx.globalCompositeOperation = 'source-over';
     ctx.setLineDash([4, 5]);
     ctx.strokeStyle = 'rgba(120,170,240,0.45)';
@@ -1111,6 +1365,11 @@ function render() {
 const hud = document.getElementById('hud');
 
 function updateHUD() {
+  if (!inGame) {
+    hud.innerHTML = '';
+    return;
+  }
+
   let ns = 0, np = 0, na = 0, nm = 0;
   let aliveCount = 0, gestatingCount = 0, habitableCount = 0;
 
@@ -1149,6 +1408,12 @@ function updateHUD() {
     followStr = ` <span class="k">|</span> <span class="follow">跟随：${selectedBody.name}</span>`;
   }
 
+  let saveStr = '';
+  const curSave = saves.find(s => s.id === currentSaveId);
+  if (curSave) {
+    saveStr = ` <span class="k">|</span> <span class="save">📁 ${curSave.name}</span>`;
+  }
+
   hud.innerHTML =
     `<span class="t">宇宙模拟器</span> · ` +
     `恒星 ${ns} · 行星 ${np} · 小行星 ${na} · 卫星 ${nm}<br>` +
@@ -1158,12 +1423,615 @@ function updateHUD() {
     `<span class="k">| ΔE</span> ${energyStr}` +
     lifeStr +
     followStr +
+    saveStr +
     (paused ? ' <span class="k">| 已暂停</span>' : '') +
     (mode === 'delete' ? ' <span class="k">| 删除模式</span>' : '') +
     (mode === 'satellite' ? ' <span class="k">| 点天体加卫星</span>' : '') +
     (mode === 'follow' ? ' <span class="k">| 点天体跟随</span>' : '') +
     (showHabitableZone ? ' <span class="k">| 宜居带 ON</span>' : '');
 }
+
+/* ===================== Toast ===================== */
+const toastEl = document.getElementById('toast');
+let toastTimer = null;
+function showToast(msg, isError) {
+  toastEl.textContent = msg;
+  toastEl.classList.toggle('error', !!isError);
+  toastEl.classList.add('show');
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toastEl.classList.remove('show');
+  }, 2200);
+}
+
+/* ===================== 存档系统 ===================== */
+const SAVE_KEY = 'cosmic-sandbox-saves-v1';
+let saves = [];
+
+function loadSavesFromStorage() {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) { saves = []; return; }
+    const arr = JSON.parse(raw);
+    saves = Array.isArray(arr) ? arr : [];
+  } catch (e) {
+    console.warn('存档读取失败', e);
+    saves = [];
+  }
+}
+
+function writeSavesToStorage() {
+  try {
+    localStorage.setItem(SAVE_KEY, JSON.stringify(saves));
+    return true;
+  } catch (e) {
+    console.warn('存档写入失败', e);
+    showToast('存档写入失败：存储空间可能已满', true);
+    return false;
+  }
+}
+
+function serializeState() {
+  const indexMap = new Map();
+  bodies.forEach((b, i) => indexMap.set(b, i));
+
+  const serializedBodies = bodies.map(b => ({
+    kind: b.kind,
+    typeKey: b.typeKey,
+    name: b.name,
+    m: b.m,
+    x: b.x, y: b.y,
+    vx: b.vx, vy: b.vy,
+    sizeMul: b.sizeMul,
+    rMul: b.rMul,
+    water: b.water,
+    rgb: b.rgb.slice(),
+    trail: b.trail.slice(-1200),
+    hostIndex: b.host ? indexMap.get(b.host) : -1,
+    orbitRadius: b.orbitRadius,
+    orbitPhase: b.orbitPhase,
+    orbitAngularSpeed: b.orbitAngularSpeed,
+    life: b.life,
+    lifeStage: b.lifeStage,
+    gestationTimer: b.gestationTimer,
+    flash: b.flash,
+    flashColor: b.flashColor,
+    impactCooldown: b.impactCooldown,
+  }));
+
+  return {
+    version: 1,
+    simTime,
+    camX, camY, camScale,
+    userZoom, userPanX, userPanY,
+    showHabitableZone,
+    selectedBodyIndex: selectedBody ? indexMap.get(selectedBody) : -1,
+    bodies: serializedBodies,
+  };
+}
+
+function deserializeState(data) {
+  if (!data || !Array.isArray(data.bodies)) {
+    throw new Error('存档数据格式不正确');
+  }
+
+  bodies = data.bodies.map(s => ({
+    kind: s.kind,
+    typeKey: s.typeKey,
+    name: s.name,
+    m: s.m,
+    x: s.x, y: s.y,
+    vx: s.vx || 0, vy: s.vy || 0,
+    ax: 0, ay: 0,
+    sizeMul: s.sizeMul,
+    rMul: s.rMul || 1,
+    water: !!s.water,
+    rgb: (s.rgb || [200, 200, 200]).slice(),
+    trail: (s.trail || [s.x, s.y]).slice(),
+    host: null,
+    orbitRadius: s.orbitRadius || 0,
+    orbitPhase: s.orbitPhase || 0,
+    orbitAngularSpeed: s.orbitAngularSpeed || 0,
+    life: s.life || 0,
+    lifeStage: s.lifeStage || 'barren',
+    gestationTimer: s.gestationTimer || 0,
+    flash: s.flash || 0,
+    flashColor: s.flashColor || null,
+    impactCooldown: s.impactCooldown || 0,
+  }));
+
+  data.bodies.forEach((s, i) => {
+    if (s.hostIndex >= 0 && bodies[s.hostIndex]) {
+      bodies[i].host = bodies[s.hostIndex];
+    }
+  });
+
+  simTime = data.simTime || 0;
+  prevSimTime = simTime;
+  nextSample = SAMPLE_DT;
+  acc = 0;
+
+  camX = data.camX || 0;
+  camY = data.camY || 0;
+  camScale = data.camScale || 220;
+  camTarget.x = camX; camTarget.y = camY; camTarget.s = camScale;
+
+  userZoom = data.userZoom || 1;
+  userPanX = data.userPanX || 0;
+  userPanY = data.userPanY || 0;
+
+  showHabitableZone = !!data.showHabitableZone;
+  document.getElementById('btnHabitable').classList.toggle('active', showHabitableZone);
+
+  selectedBody = (data.selectedBodyIndex >= 0 && bodies[data.selectedBodyIndex])
+    ? bodies[data.selectedBodyIndex]
+    : null;
+
+  impactEvents = [];
+
+  computeAccel();
+  E0 = totalEnergy();
+
+  document.getElementById('btnPause').textContent = paused ? '继续' : '暂停';
+
+  lastT = performance.now();
+}
+
+function genId() {
+  return 'save_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+}
+
+function fmtTime(ts) {
+  const d = new Date(ts);
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/* ★★★ 游戏内保存 —— 直接覆盖当前存档 ★★★ */
+function saveCurrent() {
+  if (!currentSaveId) {
+    saveAsNew();
+    return;
+  }
+  const save = saves.find(s => s.id === currentSaveId);
+  if (!save) {
+    saveAsNew();
+    return;
+  }
+
+  save.state = serializeState();
+  save.savedAt = Date.now();
+
+  if (writeSavesToStorage()) {
+    showToast('已保存：' + save.name);
+    renderSaveList();
+  }
+}
+
+/* 另存为新存档 */
+function saveAsNew() {
+  const defaultName = '宇宙 ' + new Date().toLocaleString('zh-CN', { hour12: false });
+  const name = prompt('另存为新存档，起个名字：', defaultName);
+  if (name === null) return;
+  const finalName = (name || '').trim() || defaultName;
+
+  const save = {
+    id: genId(),
+    name: finalName,
+    savedAt: Date.now(),
+    state: serializeState(),
+  };
+
+  saves.push(save);
+  if (writeSavesToStorage()) {
+    currentSaveId = save.id;
+    renderSaveList();
+    showToast('已另存为：' + finalName);
+  } else {
+    saves.pop();
+  }
+}
+
+/* ---- 启动页新建空宇宙 ---- */
+function createEmptyUniverse() {
+  const defaultName = '新宇宙 ' + new Date().toLocaleString('zh-CN', { hour12: false });
+  const name = prompt('给这个新宇宙起个名字：', defaultName);
+  if (name === null) return;
+  const finalName = (name || '').trim() || defaultName;
+
+  bodies = [];
+  impactEvents = [];
+  selectedBody = null;
+  simTime = 0; prevSimTime = 0;
+  nextSample = SAMPLE_DT; acc = 0; E0 = 0;
+  camX = 0; camY = 0; camScale = 220;
+  camTarget.x = 0; camTarget.y = 0; camTarget.s = 220;
+  userZoom = 1; userPanX = 0; userPanY = 0;
+
+  const save = {
+    id: genId(),
+    name: finalName,
+    savedAt: Date.now(),
+    state: serializeState(),
+  };
+
+  saves.push(save);
+  if (writeSavesToStorage()) {
+    showToast('已创建：' + finalName);
+    enterGame(save.id);
+  } else {
+    saves.pop();
+  }
+}
+
+/* ---- 加载存档 ---- */
+function loadSave(id) {
+  const save = saves.find(s => s.id === id);
+  if (!save) return;
+
+  if (inGame && currentSaveId === id) {
+    showToast('已经是这个存档了');
+    return;
+  }
+
+  if (inGame) {
+    if (!confirm(`确定加载「${save.name}」吗？当前未保存的内容会丢失。`)) return;
+  }
+
+  try {
+    deserializeState(save.state);
+    showToast('已加载：' + save.name);
+    enterGame(save.id);
+  } catch (e) {
+    showToast('加载失败：' + e.message, true);
+  }
+}
+
+/* ---- 删除存档 ---- */
+function deleteSave(id) {
+  const idx = saves.findIndex(s => s.id === id);
+  if (idx < 0) return;
+  const save = saves[idx];
+
+  if (!confirm(`确定删除「${save.name}」吗？此操作不可撤销。`)) return;
+
+  saves.splice(idx, 1);
+
+  if (currentSaveId === id) {
+    currentSaveId = null;
+  }
+
+  writeSavesToStorage();
+  renderSaveList();
+  showToast('已删除：' + save.name);
+}
+
+/* ★★★ 导出存档 —— Web Share API + 多重降级 ★★★ */
+async function exportSave(id) {
+  const save = saves.find(s => s.id === id);
+  if (!save) return;
+
+  const payload = {
+    format: 'cosmic-sandbox-save',
+    version: 1,
+    exportedAt: Date.now(),
+    save: save,
+  };
+
+  const data = JSON.stringify(payload, null, 2);
+  const safeName = (save.name || 'save').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40) || 'save';
+  const filename = `宇宙模拟器_${safeName}.json`;
+
+  /* ========== 方案 1：Web Share API（移动端首选，可"保存到文件"） ========== */
+  try {
+    const file = new File([data], filename, { type: 'application/json' });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({
+        files: [file],
+        title: '宇宙模拟器存档',
+        text: save.name,
+      });
+      showToast('已导出：' + safeName);
+      return;
+    }
+  } catch (err) {
+    /* 用户取消 share 不报错，其他错误继续走下面的降级 */
+    if (err && err.name === 'AbortError') return;
+    console.warn('Web Share 失败，尝试其他方式', err);
+  }
+
+  /* ========== 方案 2：Blob + a.download（桌面端 / 部分移动浏览器） ========== */
+  try {
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.rel = 'noopener';
+    a.style.display = 'none';
+    document.body.appendChild(a);
+
+    /* 移动端需要真实用户手势触发，直接 click */
+    a.click();
+
+    setTimeout(() => {
+      try { document.body.removeChild(a); } catch (_) {}
+      URL.revokeObjectURL(url);
+    }, 500);
+
+    showToast('已导出：' + safeName + '（如未自动下载请检查浏览器权限）');
+    return;
+  } catch (err) {
+    console.warn('Blob 下载失败', err);
+  }
+
+  /* ========== 方案 3：data URL 兜底 ========== */
+  try {
+    const dataUrl = 'data:application/json;charset=utf-8,' + encodeURIComponent(data);
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = filename;
+    a.rel = 'noopener';
+    a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      try { document.body.removeChild(a); } catch (_) {}
+    }, 500);
+    showToast('已导出：' + safeName);
+    return;
+  } catch (err) {
+    console.warn('Data URL 下载失败', err);
+  }
+
+  /* ========== 方案 4：终极兜底 —— 新窗口显示，用户手动复制保存 ========== */
+  try {
+    const w = window.open('', '_blank');
+    if (w) {
+      w.document.write(
+        '<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + filename + '</title>' +
+        '<style>body{background:#0a1018;color:#c3cede;font:12px ui-monospace,monospace;padding:16px;}' +
+        'pre{white-space:pre-wrap;word-break:break-all;background:#10151d;padding:12px;border-radius:8px;' +
+        'border:1px solid #1a2332;user-select:text;-webkit-user-select:text;}</style></head><body>' +
+        '<h3 style="color:#e8eef6;">存档文件内容</h3>' +
+        '<p style="color:#8d9aab;">请长按下方内容全选复制，粘贴到文本编辑器保存为 .json 文件。</p>' +
+        '<pre>' + data.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</pre>' +
+        '</body></html>'
+      );
+      w.document.close();
+      showToast('已在新窗口显示内容，请手动保存');
+    } else {
+      showToast('导出失败：浏览器阻止了下载与弹窗', true);
+    }
+  } catch (err) {
+    showToast('导出失败：' + err.message, true);
+  }
+}
+
+/* ---- 导入存档 ---- */
+function importSaveFromFile(file) {
+  if (!file) return;
+  if (file.size > 8 * 1024 * 1024) {
+    showToast('文件过大（>8MB），无法导入', true);
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = ev => {
+    try {
+      const data = JSON.parse(ev.target.result);
+
+      let save = null;
+      if (data && data.save && data.save.state) {
+        save = data.save;
+      } else if (data && data.state && data.state.bodies) {
+        save = data;
+      } else {
+        throw new Error('文件格式不正确');
+      }
+
+      if (!save.state || !Array.isArray(save.state.bodies)) {
+        throw new Error('存档内容损坏');
+      }
+
+      const newSave = {
+        id: genId(),
+        name: (save.name || '导入的存档').toString().slice(0, 60),
+        savedAt: Date.now(),
+        state: save.state,
+      };
+
+      saves.push(newSave);
+      if (writeSavesToStorage()) {
+        renderSaveList();
+        showToast('已导入：' + newSave.name);
+        try {
+          deserializeState(newSave.state);
+          enterGame(newSave.id);
+        } catch (e) {
+          showToast('导入成功但加载失败：' + e.message, true);
+        }
+      } else {
+        saves.pop();
+      }
+    } catch (e) {
+      showToast('导入失败：' + e.message, true);
+    }
+  };
+  reader.onerror = () => showToast('文件读取失败', true);
+  reader.readAsText(file);
+}
+
+/* ---- 渲染存档列表 ---- */
+function renderSaveList() {
+  const list = document.getElementById('saveList');
+  list.innerHTML = '';
+
+  if (!saves.length) {
+    const empty = document.createElement('div');
+    empty.className = 'save-empty';
+    empty.textContent = inGame
+      ? '还没有存档'
+      : '还没有存档，点下面「＋ 新建宇宙」开始吧';
+    list.appendChild(empty);
+    return;
+  }
+
+  const sorted = saves.slice().sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+
+  for (const save of sorted) {
+    const isCurrent = inGame && save.id === currentSaveId;
+
+    const item = document.createElement('div');
+    item.className = 'save-item' + (isCurrent ? ' current' : '');
+
+    const info = document.createElement('div');
+    info.className = 'info';
+
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = save.name;
+
+    if (isCurrent) {
+      const badge = document.createElement('span');
+      badge.className = 'badge';
+      badge.textContent = '当前';
+      name.appendChild(badge);
+    }
+
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    const bodyCount = save.state && Array.isArray(save.state.bodies)
+      ? save.state.bodies.length : 0;
+    meta.textContent = `${bodyCount} 个天体 · ${fmtTime(save.savedAt || 0)}`;
+
+    info.appendChild(name);
+    info.appendChild(meta);
+
+    const acts = document.createElement('div');
+    acts.className = 'acts';
+
+    if (isCurrent) {
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'btn-save';
+      saveBtn.textContent = '💾 保存';
+      saveBtn.addEventListener('click', ev => {
+        ev.stopPropagation();
+        saveCurrent();
+      });
+      acts.appendChild(saveBtn);
+    } else {
+      const loadBtn = document.createElement('button');
+      loadBtn.className = 'btn-load';
+      loadBtn.textContent = '▶ 加载';
+      loadBtn.addEventListener('click', ev => {
+        ev.stopPropagation();
+        loadSave(save.id);
+      });
+      acts.appendChild(loadBtn);
+    }
+
+    const exportBtn = document.createElement('button');
+    exportBtn.className = 'btn-export';
+    exportBtn.textContent = '⬇ 导出';
+    exportBtn.addEventListener('click', ev => {
+      ev.stopPropagation();
+      exportSave(save.id);
+    });
+    acts.appendChild(exportBtn);
+
+    const delBtn = document.createElement('button');
+    delBtn.className = 'btn-del';
+    delBtn.textContent = '✕ 删除';
+    delBtn.addEventListener('click', ev => {
+      ev.stopPropagation();
+      deleteSave(save.id);
+    });
+    acts.appendChild(delBtn);
+
+    item.appendChild(info);
+    item.appendChild(acts);
+    list.appendChild(item);
+  }
+}
+
+/* ---- 打开 / 关闭弹窗 ---- */
+function openSaveModal(isStartup) {
+  const modal = document.getElementById('saveModal');
+  const title = document.getElementById('modalTitle');
+  const subtitle = document.getElementById('modalSubtitle');
+  const newBtn = document.getElementById('btnNewSave');
+  const closeBtn = document.getElementById('modalClose');
+
+  if (isStartup) {
+    modal.classList.add('startup');
+    title.childNodes[0].nodeValue = '🌌 宇宙模拟器';
+    subtitle.textContent = '选择一个存档加载，或新建一个宇宙开始';
+    newBtn.textContent = '＋ 新建宇宙';
+    closeBtn.style.display = 'none';
+  } else {
+    modal.classList.remove('startup');
+    title.childNodes[0].nodeValue = '💾 存档管理';
+    subtitle.textContent = '当前存档会自动覆盖，其他存档可加载或另存';
+    newBtn.textContent = '＋ 另存为新存档';
+    closeBtn.style.display = '';
+  }
+
+  renderSaveList();
+  modal.classList.add('open');
+}
+
+function closeSaveModal() {
+  document.getElementById('saveModal').classList.remove('open');
+}
+
+/* ---- 进入游戏 ---- */
+function enterGame(saveId) {
+  inGame = true;
+  if (saveId) currentSaveId = saveId;
+  document.body.classList.add('in-game');
+  closeSaveModal();
+  lastT = performance.now();
+}
+
+/* ---- 事件绑定 ---- */
+document.getElementById('btnOpenSave').addEventListener('click', ev => {
+  ev.stopPropagation();
+  openSaveModal(false);
+});
+
+document.getElementById('btnSaveQuick').addEventListener('click', ev => {
+  ev.stopPropagation();
+  saveCurrent();
+});
+
+document.getElementById('modalClose').addEventListener('click', ev => {
+  ev.stopPropagation();
+  closeSaveModal();
+});
+document.getElementById('saveModal').addEventListener('click', ev => {
+  if (ev.target.id === 'saveModal' && !ev.target.classList.contains('startup')) {
+    closeSaveModal();
+  }
+});
+document.getElementById('btnNewSave').addEventListener('click', ev => {
+  ev.stopPropagation();
+  if (inGame) {
+    saveAsNew();
+  } else {
+    createEmptyUniverse();
+  }
+});
+document.getElementById('btnImportSave').addEventListener('click', ev => {
+  ev.stopPropagation();
+  document.getElementById('importFile').click();
+});
+document.getElementById('importFile').addEventListener('change', ev => {
+  const file = ev.target.files && ev.target.files[0];
+  if (file) importSaveFromFile(file);
+  ev.target.value = '';
+});
 
 /* ===================== UI 绑定 ===================== */
 const typeRow = document.getElementById('typeRow');
@@ -1314,6 +2182,18 @@ window.addEventListener('keydown', e => {
   const tag = (e.target && e.target.tagName ? e.target.tagName : '').toUpperCase();
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'BUTTON') return;
 
+  const modalOpen = document.getElementById('saveModal').classList.contains('open');
+  const isStartup = document.getElementById('saveModal').classList.contains('startup');
+
+  if (isStartup) return;
+
+  if (modalOpen) {
+    if (e.key === 'Escape') closeSaveModal();
+    return;
+  }
+
+  if (!inGame) return;
+
   const key = e.key;
 
   if (key === ' ') {
@@ -1329,6 +2209,11 @@ window.addEventListener('keydown', e => {
   if (key === 'h' || key === 'H') {
     showHabitableZone = !showHabitableZone;
     document.getElementById('btnHabitable').classList.toggle('active', showHabitableZone);
+    return;
+  }
+  if ((key === 's' || key === 'S') && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    saveCurrent();
     return;
   }
   if (key === 'f' || key === 'F') { setMode('follow'); return; }
@@ -1379,9 +2264,9 @@ function refreshGesturing() {
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 
 canvas.addEventListener('pointerdown', e => {
+  if (!inGame) return;
   if (e.target !== canvas) return;
 
-  /* 中键 / 右键 → 直接进入拖拽平移，不放置 */
   const isPanButton = (e.button === 1 || e.button === 2);
 
   activePointers.set(e.pointerId, {
@@ -1390,7 +2275,7 @@ canvas.addEventListener('pointerdown', e => {
     x: e.clientX, y: e.clientY,
     startX: e.clientX, startY: e.clientY,
     startTime: performance.now(),
-    moved: isPanButton,   /* 平移按钮视为已移动，避免松手后触发点击 */
+    moved: isPanButton,
     isPan: isPanButton
   });
   refreshGesturing();
@@ -1421,6 +2306,8 @@ canvas.addEventListener('pointerdown', e => {
 });
 
 canvas.addEventListener('pointermove', e => {
+  if (!inGame) return;
+
   if (e.pointerType === 'mouse') {
     mouseX = e.clientX;
     mouseY = e.clientY;
@@ -1484,9 +2371,8 @@ function releasePointer(e) {
   refreshGesturing();
   updateCursor();
 
-  /* 轻点判定：没移动过 + 不是平移按钮 + 最后一根手指 + 时间够短 */
   if (p && !p.moved && !p.isPan && activePointers.size === 0 &&
-      performance.now() - p.startTime < 500) {
+      performance.now() - p.startTime < 500 && inGame) {
     handleClick(e.clientX, e.clientY);
   }
 
@@ -1541,6 +2427,7 @@ function handleClick(px, py) {
 }
 
 canvas.addEventListener('wheel', e => {
+  if (!inGame) return;
   e.preventDefault();
   const factor = Math.exp(-e.deltaY * 0.0015);
   const mx = e.clientX, my = e.clientY;
@@ -1580,6 +2467,8 @@ function frame(now) {
   lastT = now;
   if (dt > 0.05) dt = 0.05;
 
+  if (!inGame) return;
+
   if (!paused && bodies.length) {
     acc += dt * speed;
     let steps = 0;
@@ -1612,6 +2501,10 @@ resize();
 setMode('star');
 buildTypeButtons();
 updateCursor();
+loadSavesFromStorage();
+
+openSaveModal(true);
+
 requestAnimationFrame(frame);
 </script>
 </body>
