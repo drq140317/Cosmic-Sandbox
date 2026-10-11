@@ -382,9 +382,9 @@
 <script>
 /* =============================================================
    宇宙模拟器 —— 恒星 / 行星 / 小行星 / 卫星 沙盒
-   · 启动时进入存档页，必须加载 / 新建 / 导入才能进入游戏
-   · 「当前存档」概念：进游戏后点「保存」直接覆盖当前存档
-   · 导出使用 Web Share API + 多重降级，确保移动端能下载到本地
+   · 启动时进入存档页
+   · 天体合并：动量守恒 + 位置取质心（相机不再跳）
+   · 跟随视角、卫星绑定、生命系统、存档系统
    ============================================================= */
 
 const canvas = document.getElementById('c');
@@ -399,7 +399,6 @@ function resize() {
   canvas.height = Math.round(H * DPR);
   canvas.style.width  = W + 'px';
   canvas.style.height = H + 'px';
-
   stars = [];
   const n = Math.round(W * H / 8000);
   for (let i = 0; i < n; i++) {
@@ -495,10 +494,7 @@ let showHabitableZone = false;
 let selectedBody = null;
 let impactEvents = [];
 
-/* ★ 是否已进入游戏 */
 let inGame = false;
-
-/* ★ 当前存档 id */
 let currentSaveId = null;
 
 /* ===================== 工具 ===================== */
@@ -541,7 +537,6 @@ function getHabitabilityInfo(body) {
   let closestStar = null;
   let closestDist = Infinity;
   let closestHZ = null;
-
   for (const s of bodies) {
     if (s.kind !== 'star') continue;
     const d = Math.hypot(body.x - s.x, body.y - s.y);
@@ -551,15 +546,12 @@ function getHabitabilityInfo(body) {
       closestHZ = habitableZone(s);
     }
   }
-
   if (!closestStar) {
     return { inHZ: false, tooHot: false, tooCold: true, star: null, dist: 0, hz: null };
   }
-
   const tooHot  = closestDist < closestHZ.rIn * 0.75;
   const tooCold = closestDist > closestHZ.rOut * 1.5;
   const inHZ    = closestDist >= closestHZ.rIn && closestDist <= closestHZ.rOut;
-
   return { inHZ, tooHot, tooCold, star: closestStar, dist: closestDist, hz: closestHZ };
 }
 
@@ -571,30 +563,14 @@ function isInHabitableZoneSimple(body) {
 function createBody(kind, typeKey, sizeMulVal, x, y) {
   const t = CATEGORIES[kind].types[typeKey];
   const mass = t.mass * Math.pow(sizeMulVal, 2.5);
-
   return {
-    kind, typeKey,
-    name: t.name,
-    m: mass,
-    x, y, vx: 0, vy: 0,
-    ax: 0, ay: 0,
-    sizeMul: sizeMulVal,
-    rMul: t.rMul || 1,
-    water: !!t.water,
-    rgb: t.rgb.slice(),
-    trail: [x, y],
-
-    host: null,
-    orbitRadius: 0,
-    orbitPhase: 0,
-    orbitAngularSpeed: 0,
-
-    life: 0,
-    lifeStage: 'barren',
-    gestationTimer: 0,
-    flash: 0,
-    flashColor: null,
-    impactCooldown: 0,
+    kind, typeKey, name: t.name, m: mass,
+    x, y, vx: 0, vy: 0, ax: 0, ay: 0,
+    sizeMul: sizeMulVal, rMul: t.rMul || 1,
+    water: !!t.water, rgb: t.rgb.slice(), trail: [x, y],
+    host: null, orbitRadius: 0, orbitPhase: 0, orbitAngularSpeed: 0,
+    life: 0, lifeStage: 'barren', gestationTimer: 0,
+    flash: 0, flashColor: null, impactCooldown: 0,
   };
 }
 
@@ -669,7 +645,6 @@ function vvStep(maxH) {
     b.vx = b.host.vx - Math.sin(b.orbitPhase) * tang;
     b.vy = b.host.vy + Math.cos(b.orbitPhase) * tang;
   }
-
   return h;
 }
 
@@ -790,8 +765,16 @@ function resolveCollisions(simDt) {
             planet.flashColor = [255, 160, 70];
           }
           events.push({ x: planet.x, y: planet.y, t: 0, type: 'impact' });
-          planet.m += asteroid.m;
+
+          /* ★ 动量守恒 + 位置取质心，避免相机跳变 */
+          const mergedMP = planet.m + asteroid.m;
+          planet.vx = (planet.m * planet.vx + asteroid.m * asteroid.vx) / mergedMP;
+          planet.vy = (planet.m * planet.vy + asteroid.m * asteroid.vy) / mergedMP;
+          planet.x = (planet.m * planet.x + asteroid.m * asteroid.x) / mergedMP;
+          planet.y = (planet.m * planet.y + asteroid.m * asteroid.y) / mergedMP;
+          planet.m  = mergedMP;
           planet.sizeMul = Math.min(4.0, sizeFromMass(planet.kind, planet.typeKey, planet.m));
+
           toRemove.add(asteroid);
         }
       } else {
@@ -813,7 +796,13 @@ function resolveCollisions(simDt) {
 
         events.push({ x: big.x, y: big.y, t: 0, type: 'impact' });
 
-        big.m += small.m;
+        /* ★ 动量守恒 + 位置取质心，避免相机跟随质心跳变而"甩出去" */
+        const mergedM = big.m + small.m;
+        big.vx = (big.m * big.vx + small.m * small.vx) / mergedM;
+        big.vy = (big.m * big.vy + small.m * small.vy) / mergedM;
+        big.x  = (big.m * big.x  + small.m * small.x)  / mergedM;
+        big.y  = (big.m * big.y  + small.m * small.y)  / mergedM;
+        big.m  = mergedM;
         big.sizeMul = Math.min(4.0, sizeFromMass(big.kind, big.typeKey, big.m));
 
         toRemove.add(small);
@@ -822,9 +811,21 @@ function resolveCollisions(simDt) {
   }
 
   if (toRemove.size > 0) {
+    /* 若跟随目标被吸收，改为跟随合并后的天体 */
     if (selectedBody && toRemove.has(selectedBody)) {
-      selectedBody = null;
+      const followSmall = selectedBody;
+      /* 找到与它合并的 big：遍历是复杂的，简单起见直接清空跟随 */
+      /* 更优：本轮 toRemove 里非 follower 的其他天体若有，跟随它 */
+      let newTarget = null;
+      for (const b of bodies) {
+        if (!toRemove.has(b) && b !== followSmall && b.kind !== 'satellite') {
+          newTarget = b; /* 保守选择第一个幸存者 */
+          break;
+        }
+      }
+      selectedBody = newTarget;
     }
+
     bodies = bodies.filter(b => !toRemove.has(b));
     computeAccel();
     E0 = totalEnergy();
@@ -836,14 +837,11 @@ function resolveCollisions(simDt) {
 /* ===================== 生命演化 ===================== */
 function updateLife(simDt) {
   if (simDt <= 0) return;
-
   resolveCollisions(simDt);
 
   for (const b of bodies) {
     if (b.kind !== 'planet') continue;
-
     if (b.flash > 0) b.flash = Math.max(0, b.flash - simDt * 1.6);
-
     const info = getHabitabilityInfo(b);
 
     if (info.tooHot) {
@@ -875,13 +873,10 @@ function updateLife(simDt) {
       } else if (b.lifeStage === 'alive') {
         const decay = info.tooCold ? 0.03 : 0.05;
         b.life = Math.max(0, b.life - decay * simDt);
-        if (b.life <= 0.02) {
-          killLife(b, [120, 180, 255]);
-        }
+        if (b.life <= 0.02) killLife(b, [120, 180, 255]);
       }
     }
   }
-
   for (const ev of impactEvents) ev.t += simDt;
   impactEvents = impactEvents.filter(ev => ev.t < 1.2);
 }
@@ -893,26 +888,20 @@ function placeBody(kind, typeKey, sizeMulVal, x, y, motion, host) {
   if (kind === 'satellite') {
     if (!host) return null;
     b.host = host;
-
-    const dx = x - host.x;
-    const dy = y - host.y;
+    const dx = x - host.x, dy = y - host.y;
     let r = Math.hypot(dx, dy);
     const minR = 0.12 + 0.10 * host.sizeMul;
     const maxR = 1.6;
     if (r < minR) r = minR;
     if (r > maxR) r = maxR;
-
     b.orbitRadius = r;
     b.orbitPhase = Math.atan2(dy, dx);
-
     const vPhys = Math.sqrt(G * Math.max(host.m, 1e-9) / r);
     b.orbitAngularSpeed = (vPhys / r) * SATELLITE_SPEED_MUL;
-
     b.x = host.x + Math.cos(b.orbitPhase) * r;
     b.y = host.y + Math.sin(b.orbitPhase) * r;
     b.vx = host.vx - Math.sin(b.orbitPhase) * r * b.orbitAngularSpeed;
     b.vy = host.vy + Math.cos(b.orbitPhase) * r * b.orbitAngularSpeed;
-
   } else if (motion === 'orbit') {
     const { x: cx, y: cy, M } = getCentroid();
     if (M > 0) {
@@ -962,7 +951,6 @@ function findHostForSatellite(px, py) {
 
 function deleteBody(b) {
   if (selectedBody === b) selectedBody = null;
-
   for (let k = bodies.length - 1; k >= 0; k--) {
     const s = bodies[k];
     if (s !== b && s.kind === 'satellite' && s.host === b) {
@@ -997,10 +985,8 @@ function updateCamera(dt) {
     const k = Math.min(1, dt * 16);
     camTarget.x = selectedBody.x + userPanX;
     camTarget.y = selectedBody.y + userPanY;
-
     const base = autoBaseScale();
     camTarget.s = base * userZoom;
-
     camX += (camTarget.x - camX) * k;
     camY += (camTarget.y - camY) * k;
     camScale += (camTarget.s - camScale) * k;
@@ -1107,7 +1093,6 @@ function render() {
   if (showHabitableZone) {
     for (const b of bodies) {
       if (b.kind !== 'star') continue;
-
       const x = SX(b.x), y = SY(b.y);
       const hz = habitableZone(b);
       const rInPx  = hz.rIn  * camScale;
@@ -1115,7 +1100,6 @@ function render() {
       if (rOutPx < 4) continue;
 
       ctx.globalCompositeOperation = 'lighter';
-
       ctx.beginPath();
       ctx.arc(x, y, rOutPx, 0, TWO_PI);
       if (rInPx > 0.5) ctx.arc(x, y, rInPx, 0, TWO_PI, true);
@@ -1136,7 +1120,6 @@ function render() {
         ctx.fillStyle = grd;
         ctx.beginPath(); ctx.arc(x, y, rOutPx, 0, TWO_PI); ctx.fill();
       }
-
       if (rOutPx > 55) {
         ctx.globalCompositeOperation = 'source-over';
         ctx.globalAlpha = 0.55;
@@ -1157,7 +1140,6 @@ function render() {
     const t = b.trail;
     const n = t.length / 2;
     if (n < 2) continue;
-
     const [r, g, bl] = b.rgb;
     const isStar = b.kind === 'star';
     const isSat  = b.kind === 'satellite';
@@ -1250,7 +1232,6 @@ function render() {
       ctx.beginPath(); ctx.arc(x, y, core * 1.6, 0, TWO_PI); ctx.stroke();
       ctx.globalAlpha = 1;
     }
-
     if (b.kind === 'planet' && b.life > 0.35) {
       const lifeAlpha = Math.min(0.85, (b.life - 0.35) * 1.5);
       ctx.globalAlpha = lifeAlpha;
@@ -1259,7 +1240,6 @@ function render() {
       ctx.beginPath(); ctx.arc(x, y, core * 2.4, 0, TWO_PI); ctx.stroke();
       ctx.globalAlpha = 1;
     }
-
     if (b.kind === 'planet' && b.lifeStage === 'gestating') {
       ctx.globalAlpha = 0.7;
       ctx.strokeStyle = 'rgba(140,235,180,0.7)';
@@ -1269,7 +1249,6 @@ function render() {
       ctx.setLineDash([]);
       ctx.globalAlpha = 1;
     }
-
     if (b === selectedBody) {
       const t = performance.now() * 0.003;
       const rr = core * 3.2 + 8 + Math.sin(t) * 3;
@@ -1301,25 +1280,21 @@ function render() {
       ctx.strokeStyle = 'rgba(120, 220, 255, 0.95)';
       ctx.lineWidth = 3 * (1 - prog * 0.6);
       ctx.beginPath(); ctx.arc(x, y, ringR * 0.85, 0, TWO_PI); ctx.stroke();
-
       ctx.globalAlpha = alpha * 0.7;
       ctx.strokeStyle = 'rgba(200, 240, 255, 0.9)';
       ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.arc(x, y, ringR * 0.5, 0, TWO_PI); ctx.stroke();
-
       const coreGrd = ctx.createRadialGradient(x, y, 0, x, y, ringR * 0.6);
       coreGrd.addColorStop(0.00, `rgba(200, 240, 255, ${alpha * 0.7})`);
       coreGrd.addColorStop(0.55, `rgba(120, 200, 255, ${alpha * 0.35})`);
       coreGrd.addColorStop(1.00, 'rgba( 60, 140, 220, 0)');
       ctx.fillStyle = coreGrd;
       ctx.beginPath(); ctx.arc(x, y, ringR * 0.6, 0, TWO_PI); ctx.fill();
-
     } else {
       ctx.globalAlpha = alpha * 0.85;
       ctx.strokeStyle = 'rgba(255, 150, 60, 0.95)';
       ctx.lineWidth = 3 * (1 - prog * 0.6);
       ctx.beginPath(); ctx.arc(x, y, ringR, 0, TWO_PI); ctx.stroke();
-
       const coreGrd = ctx.createRadialGradient(x, y, 0, x, y, ringR * 0.7);
       coreGrd.addColorStop(0.00, `rgba(255, 240, 200, ${alpha})`);
       coreGrd.addColorStop(0.45, `rgba(255, 170, 80, ${alpha * 0.6})`);
@@ -1349,7 +1324,6 @@ function render() {
     ctx.setLineDash([4, 4]);
     ctx.beginPath(); ctx.arc(x, y, 22, 0, TWO_PI); ctx.stroke();
     ctx.setLineDash([]);
-
     ctx.strokeStyle = 'rgba(255,120,120,0.9)';
     ctx.beginPath();
     ctx.moveTo(x - 6, y - 6); ctx.lineTo(x + 6, y + 6);
@@ -1365,10 +1339,7 @@ function render() {
 const hud = document.getElementById('hud');
 
 function updateHUD() {
-  if (!inGame) {
-    hud.innerHTML = '';
-    return;
-  }
+  if (!inGame) { hud.innerHTML = ''; return; }
 
   let ns = 0, np = 0, na = 0, nm = 0;
   let aliveCount = 0, gestatingCount = 0, habitableCount = 0;
@@ -1398,9 +1369,7 @@ function updateHUD() {
     lifeStr = ` <span class="k">|</span> <span class="life">生命 ${aliveCount}`;
     if (gestatingCount > 0) lifeStr += ` <span class="warn">(孕育 ${gestatingCount})</span>`;
     lifeStr += `</span>`;
-    if (habitableCount > 0) {
-      lifeStr += ` <span class="k">(宜居 ${habitableCount})</span>`;
-    }
+    if (habitableCount > 0) lifeStr += ` <span class="k">(宜居 ${habitableCount})</span>`;
   }
 
   let followStr = '';
@@ -1410,9 +1379,7 @@ function updateHUD() {
 
   let saveStr = '';
   const curSave = saves.find(s => s.id === currentSaveId);
-  if (curSave) {
-    saveStr = ` <span class="k">|</span> <span class="save">📁 ${curSave.name}</span>`;
-  }
+  if (curSave) saveStr = ` <span class="k">|</span> <span class="save">📁 ${curSave.name}</span>`;
 
   hud.innerHTML =
     `<span class="t">宇宙模拟器</span> · ` +
@@ -1421,9 +1388,7 @@ function updateHUD() {
     `<span class="k">| 速度</span> ${speed.toFixed(1)}× ` +
     `<span class="k">| 缩放</span> ${userZoom.toFixed(2)}× ` +
     `<span class="k">| ΔE</span> ${energyStr}` +
-    lifeStr +
-    followStr +
-    saveStr +
+    lifeStr + followStr + saveStr +
     (paused ? ' <span class="k">| 已暂停</span>' : '') +
     (mode === 'delete' ? ' <span class="k">| 删除模式</span>' : '') +
     (mode === 'satellite' ? ' <span class="k">| 点天体加卫星</span>' : '') +
@@ -1439,9 +1404,7 @@ function showToast(msg, isError) {
   toastEl.classList.toggle('error', !!isError);
   toastEl.classList.add('show');
   if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => {
-    toastEl.classList.remove('show');
-  }, 2200);
+  toastTimer = setTimeout(() => { toastEl.classList.remove('show'); }, 2200);
 }
 
 /* ===================== 存档系统 ===================== */
@@ -1454,10 +1417,7 @@ function loadSavesFromStorage() {
     if (!raw) { saves = []; return; }
     const arr = JSON.parse(raw);
     saves = Array.isArray(arr) ? arr : [];
-  } catch (e) {
-    console.warn('存档读取失败', e);
-    saves = [];
-  }
+  } catch (e) { console.warn('存档读取失败', e); saves = []; }
 }
 
 function writeSavesToStorage() {
@@ -1474,34 +1434,18 @@ function writeSavesToStorage() {
 function serializeState() {
   const indexMap = new Map();
   bodies.forEach((b, i) => indexMap.set(b, i));
-
   const serializedBodies = bodies.map(b => ({
-    kind: b.kind,
-    typeKey: b.typeKey,
-    name: b.name,
-    m: b.m,
-    x: b.x, y: b.y,
-    vx: b.vx, vy: b.vy,
-    sizeMul: b.sizeMul,
-    rMul: b.rMul,
-    water: b.water,
-    rgb: b.rgb.slice(),
+    kind: b.kind, typeKey: b.typeKey, name: b.name, m: b.m,
+    x: b.x, y: b.y, vx: b.vx, vy: b.vy,
+    sizeMul: b.sizeMul, rMul: b.rMul, water: b.water, rgb: b.rgb.slice(),
     trail: b.trail.slice(-1200),
     hostIndex: b.host ? indexMap.get(b.host) : -1,
-    orbitRadius: b.orbitRadius,
-    orbitPhase: b.orbitPhase,
-    orbitAngularSpeed: b.orbitAngularSpeed,
-    life: b.life,
-    lifeStage: b.lifeStage,
-    gestationTimer: b.gestationTimer,
-    flash: b.flash,
-    flashColor: b.flashColor,
-    impactCooldown: b.impactCooldown,
+    orbitRadius: b.orbitRadius, orbitPhase: b.orbitPhase, orbitAngularSpeed: b.orbitAngularSpeed,
+    life: b.life, lifeStage: b.lifeStage, gestationTimer: b.gestationTimer,
+    flash: b.flash, flashColor: b.flashColor, impactCooldown: b.impactCooldown,
   }));
-
   return {
-    version: 1,
-    simTime,
+    version: 1, simTime,
     camX, camY, camScale,
     userZoom, userPanX, userPanY,
     showHabitableZone,
@@ -1511,69 +1455,35 @@ function serializeState() {
 }
 
 function deserializeState(data) {
-  if (!data || !Array.isArray(data.bodies)) {
-    throw new Error('存档数据格式不正确');
-  }
-
+  if (!data || !Array.isArray(data.bodies)) throw new Error('存档数据格式不正确');
   bodies = data.bodies.map(s => ({
-    kind: s.kind,
-    typeKey: s.typeKey,
-    name: s.name,
-    m: s.m,
-    x: s.x, y: s.y,
-    vx: s.vx || 0, vy: s.vy || 0,
-    ax: 0, ay: 0,
-    sizeMul: s.sizeMul,
-    rMul: s.rMul || 1,
-    water: !!s.water,
-    rgb: (s.rgb || [200, 200, 200]).slice(),
-    trail: (s.trail || [s.x, s.y]).slice(),
+    kind: s.kind, typeKey: s.typeKey, name: s.name, m: s.m,
+    x: s.x, y: s.y, vx: s.vx || 0, vy: s.vy || 0, ax: 0, ay: 0,
+    sizeMul: s.sizeMul, rMul: s.rMul || 1, water: !!s.water,
+    rgb: (s.rgb || [200,200,200]).slice(), trail: (s.trail || [s.x, s.y]).slice(),
     host: null,
-    orbitRadius: s.orbitRadius || 0,
-    orbitPhase: s.orbitPhase || 0,
-    orbitAngularSpeed: s.orbitAngularSpeed || 0,
-    life: s.life || 0,
-    lifeStage: s.lifeStage || 'barren',
-    gestationTimer: s.gestationTimer || 0,
-    flash: s.flash || 0,
-    flashColor: s.flashColor || null,
-    impactCooldown: s.impactCooldown || 0,
+    orbitRadius: s.orbitRadius || 0, orbitPhase: s.orbitPhase || 0, orbitAngularSpeed: s.orbitAngularSpeed || 0,
+    life: s.life || 0, lifeStage: s.lifeStage || 'barren', gestationTimer: s.gestationTimer || 0,
+    flash: s.flash || 0, flashColor: s.flashColor || null, impactCooldown: s.impactCooldown || 0,
   }));
-
   data.bodies.forEach((s, i) => {
-    if (s.hostIndex >= 0 && bodies[s.hostIndex]) {
-      bodies[i].host = bodies[s.hostIndex];
-    }
+    if (s.hostIndex >= 0 && bodies[s.hostIndex]) bodies[i].host = bodies[s.hostIndex];
   });
-
   simTime = data.simTime || 0;
   prevSimTime = simTime;
-  nextSample = SAMPLE_DT;
-  acc = 0;
-
-  camX = data.camX || 0;
-  camY = data.camY || 0;
-  camScale = data.camScale || 220;
+  nextSample = SAMPLE_DT; acc = 0;
+  camX = data.camX || 0; camY = data.camY || 0; camScale = data.camScale || 220;
   camTarget.x = camX; camTarget.y = camY; camTarget.s = camScale;
-
   userZoom = data.userZoom || 1;
   userPanX = data.userPanX || 0;
   userPanY = data.userPanY || 0;
-
   showHabitableZone = !!data.showHabitableZone;
   document.getElementById('btnHabitable').classList.toggle('active', showHabitableZone);
-
-  selectedBody = (data.selectedBodyIndex >= 0 && bodies[data.selectedBodyIndex])
-    ? bodies[data.selectedBodyIndex]
-    : null;
-
+  selectedBody = (data.selectedBodyIndex >= 0 && bodies[data.selectedBodyIndex]) ? bodies[data.selectedBodyIndex] : null;
   impactEvents = [];
-
   computeAccel();
   E0 = totalEnergy();
-
   document.getElementById('btnPause').textContent = paused ? '继续' : '暂停';
-
   lastT = performance.now();
 }
 
@@ -1587,52 +1497,32 @@ function fmtTime(ts) {
   return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-/* ★★★ 游戏内保存 —— 直接覆盖当前存档 ★★★ */
 function saveCurrent() {
-  if (!currentSaveId) {
-    saveAsNew();
-    return;
-  }
+  if (!currentSaveId) { saveAsNew(); return; }
   const save = saves.find(s => s.id === currentSaveId);
-  if (!save) {
-    saveAsNew();
-    return;
-  }
-
+  if (!save) { saveAsNew(); return; }
   save.state = serializeState();
   save.savedAt = Date.now();
-
   if (writeSavesToStorage()) {
     showToast('已保存：' + save.name);
     renderSaveList();
   }
 }
 
-/* 另存为新存档 */
 function saveAsNew() {
   const defaultName = '宇宙 ' + new Date().toLocaleString('zh-CN', { hour12: false });
   const name = prompt('另存为新存档，起个名字：', defaultName);
   if (name === null) return;
   const finalName = (name || '').trim() || defaultName;
-
-  const save = {
-    id: genId(),
-    name: finalName,
-    savedAt: Date.now(),
-    state: serializeState(),
-  };
-
+  const save = { id: genId(), name: finalName, savedAt: Date.now(), state: serializeState() };
   saves.push(save);
   if (writeSavesToStorage()) {
     currentSaveId = save.id;
     renderSaveList();
     showToast('已另存为：' + finalName);
-  } else {
-    saves.pop();
-  }
+  } else { saves.pop(); }
 }
 
-/* ---- 启动页新建空宇宙 ---- */
 function createEmptyUniverse() {
   const defaultName = '新宇宙 ' + new Date().toLocaleString('zh-CN', { hour12: false });
   const name = prompt('给这个新宇宙起个名字：', defaultName);
@@ -1648,144 +1538,84 @@ function createEmptyUniverse() {
   camTarget.x = 0; camTarget.y = 0; camTarget.s = 220;
   userZoom = 1; userPanX = 0; userPanY = 0;
 
-  const save = {
-    id: genId(),
-    name: finalName,
-    savedAt: Date.now(),
-    state: serializeState(),
-  };
-
+  const save = { id: genId(), name: finalName, savedAt: Date.now(), state: serializeState() };
   saves.push(save);
   if (writeSavesToStorage()) {
     showToast('已创建：' + finalName);
     enterGame(save.id);
-  } else {
-    saves.pop();
-  }
+  } else { saves.pop(); }
 }
 
-/* ---- 加载存档 ---- */
 function loadSave(id) {
   const save = saves.find(s => s.id === id);
   if (!save) return;
-
-  if (inGame && currentSaveId === id) {
-    showToast('已经是这个存档了');
-    return;
-  }
-
+  if (inGame && currentSaveId === id) { showToast('已经是这个存档了'); return; }
   if (inGame) {
     if (!confirm(`确定加载「${save.name}」吗？当前未保存的内容会丢失。`)) return;
   }
-
   try {
     deserializeState(save.state);
     showToast('已加载：' + save.name);
     enterGame(save.id);
-  } catch (e) {
-    showToast('加载失败：' + e.message, true);
-  }
+  } catch (e) { showToast('加载失败：' + e.message, true); }
 }
 
-/* ---- 删除存档 ---- */
 function deleteSave(id) {
   const idx = saves.findIndex(s => s.id === id);
   if (idx < 0) return;
   const save = saves[idx];
-
   if (!confirm(`确定删除「${save.name}」吗？此操作不可撤销。`)) return;
-
   saves.splice(idx, 1);
-
-  if (currentSaveId === id) {
-    currentSaveId = null;
-  }
-
+  if (currentSaveId === id) currentSaveId = null;
   writeSavesToStorage();
   renderSaveList();
   showToast('已删除：' + save.name);
 }
 
-/* ★★★ 导出存档 —— Web Share API + 多重降级 ★★★ */
 async function exportSave(id) {
   const save = saves.find(s => s.id === id);
   if (!save) return;
-
-  const payload = {
-    format: 'cosmic-sandbox-save',
-    version: 1,
-    exportedAt: Date.now(),
-    save: save,
-  };
-
+  const payload = { format: 'cosmic-sandbox-save', version: 1, exportedAt: Date.now(), save };
   const data = JSON.stringify(payload, null, 2);
   const safeName = (save.name || 'save').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40) || 'save';
   const filename = `宇宙模拟器_${safeName}.json`;
 
-  /* ========== 方案 1：Web Share API（移动端首选，可"保存到文件"） ========== */
   try {
     const file = new File([data], filename, { type: 'application/json' });
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
-      await navigator.share({
-        files: [file],
-        title: '宇宙模拟器存档',
-        text: save.name,
-      });
+      await navigator.share({ files: [file], title: '宇宙模拟器存档', text: save.name });
       showToast('已导出：' + safeName);
       return;
     }
   } catch (err) {
-    /* 用户取消 share 不报错，其他错误继续走下面的降级 */
     if (err && err.name === 'AbortError') return;
-    console.warn('Web Share 失败，尝试其他方式', err);
+    console.warn('Web Share 失败', err);
   }
 
-  /* ========== 方案 2：Blob + a.download（桌面端 / 部分移动浏览器） ========== */
   try {
     const blob = new Blob([data], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-
     const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    a.rel = 'noopener';
-    a.style.display = 'none';
-    document.body.appendChild(a);
-
-    /* 移动端需要真实用户手势触发，直接 click */
-    a.click();
-
+    a.href = url; a.download = filename; a.rel = 'noopener'; a.style.display = 'none';
+    document.body.appendChild(a); a.click();
     setTimeout(() => {
       try { document.body.removeChild(a); } catch (_) {}
       URL.revokeObjectURL(url);
     }, 500);
-
-    showToast('已导出：' + safeName + '（如未自动下载请检查浏览器权限）');
+    showToast('已导出：' + safeName);
     return;
-  } catch (err) {
-    console.warn('Blob 下载失败', err);
-  }
+  } catch (err) { console.warn('Blob 失败', err); }
 
-  /* ========== 方案 3：data URL 兜底 ========== */
   try {
     const dataUrl = 'data:application/json;charset=utf-8,' + encodeURIComponent(data);
     const a = document.createElement('a');
-    a.href = dataUrl;
-    a.download = filename;
-    a.rel = 'noopener';
-    a.style.display = 'none';
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(() => {
-      try { document.body.removeChild(a); } catch (_) {}
-    }, 500);
+    a.href = dataUrl; a.download = filename; a.style.display = 'none';
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { try { document.body.removeChild(a); } catch (_) {} }, 500);
     showToast('已导出：' + safeName);
     return;
-  } catch (err) {
-    console.warn('Data URL 下载失败', err);
-  }
+  } catch (err) { console.warn('DataURL 失败', err); }
 
-  /* ========== 方案 4：终极兜底 —— 新窗口显示，用户手动复制保存 ========== */
   try {
     const w = window.open('', '_blank');
     if (w) {
@@ -1796,52 +1626,29 @@ async function exportSave(id) {
         'border:1px solid #1a2332;user-select:text;-webkit-user-select:text;}</style></head><body>' +
         '<h3 style="color:#e8eef6;">存档文件内容</h3>' +
         '<p style="color:#8d9aab;">请长按下方内容全选复制，粘贴到文本编辑器保存为 .json 文件。</p>' +
-        '<pre>' + data.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</pre>' +
-        '</body></html>'
+        '<pre>' + data.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</pre></body></html>'
       );
       w.document.close();
       showToast('已在新窗口显示内容，请手动保存');
     } else {
       showToast('导出失败：浏览器阻止了下载与弹窗', true);
     }
-  } catch (err) {
-    showToast('导出失败：' + err.message, true);
-  }
+  } catch (err) { showToast('导出失败：' + err.message, true); }
 }
 
-/* ---- 导入存档 ---- */
 function importSaveFromFile(file) {
   if (!file) return;
-  if (file.size > 8 * 1024 * 1024) {
-    showToast('文件过大（>8MB），无法导入', true);
-    return;
-  }
-
+  if (file.size > 8 * 1024 * 1024) { showToast('文件过大（>8MB），无法导入', true); return; }
   const reader = new FileReader();
   reader.onload = ev => {
     try {
       const data = JSON.parse(ev.target.result);
-
       let save = null;
-      if (data && data.save && data.save.state) {
-        save = data.save;
-      } else if (data && data.state && data.state.bodies) {
-        save = data;
-      } else {
-        throw new Error('文件格式不正确');
-      }
-
-      if (!save.state || !Array.isArray(save.state.bodies)) {
-        throw new Error('存档内容损坏');
-      }
-
-      const newSave = {
-        id: genId(),
-        name: (save.name || '导入的存档').toString().slice(0, 60),
-        savedAt: Date.now(),
-        state: save.state,
-      };
-
+      if (data && data.save && data.save.state) save = data.save;
+      else if (data && data.state && data.state.bodies) save = data;
+      else throw new Error('文件格式不正确');
+      if (!save.state || !Array.isArray(save.state.bodies)) throw new Error('存档内容损坏');
+      const newSave = { id: genId(), name: (save.name || '导入的存档').toString().slice(0, 60), savedAt: Date.now(), state: save.state };
       saves.push(newSave);
       if (writeSavesToStorage()) {
         renderSaveList();
@@ -1849,121 +1656,83 @@ function importSaveFromFile(file) {
         try {
           deserializeState(newSave.state);
           enterGame(newSave.id);
-        } catch (e) {
-          showToast('导入成功但加载失败：' + e.message, true);
-        }
-      } else {
-        saves.pop();
-      }
-    } catch (e) {
-      showToast('导入失败：' + e.message, true);
-    }
+        } catch (e) { showToast('导入成功但加载失败：' + e.message, true); }
+      } else { saves.pop(); }
+    } catch (e) { showToast('导入失败：' + e.message, true); }
   };
   reader.onerror = () => showToast('文件读取失败', true);
   reader.readAsText(file);
 }
 
-/* ---- 渲染存档列表 ---- */
 function renderSaveList() {
   const list = document.getElementById('saveList');
   list.innerHTML = '';
-
   if (!saves.length) {
     const empty = document.createElement('div');
     empty.className = 'save-empty';
-    empty.textContent = inGame
-      ? '还没有存档'
-      : '还没有存档，点下面「＋ 新建宇宙」开始吧';
+    empty.textContent = inGame ? '还没有存档' : '还没有存档，点下面「＋ 新建宇宙」开始吧';
     list.appendChild(empty);
     return;
   }
-
   const sorted = saves.slice().sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
-
   for (const save of sorted) {
     const isCurrent = inGame && save.id === currentSaveId;
-
     const item = document.createElement('div');
     item.className = 'save-item' + (isCurrent ? ' current' : '');
-
     const info = document.createElement('div');
     info.className = 'info';
-
     const name = document.createElement('span');
     name.className = 'name';
     name.textContent = save.name;
-
     if (isCurrent) {
       const badge = document.createElement('span');
       badge.className = 'badge';
       badge.textContent = '当前';
       name.appendChild(badge);
     }
-
     const meta = document.createElement('span');
     meta.className = 'meta';
-    const bodyCount = save.state && Array.isArray(save.state.bodies)
-      ? save.state.bodies.length : 0;
+    const bodyCount = save.state && Array.isArray(save.state.bodies) ? save.state.bodies.length : 0;
     meta.textContent = `${bodyCount} 个天体 · ${fmtTime(save.savedAt || 0)}`;
-
-    info.appendChild(name);
-    info.appendChild(meta);
+    info.appendChild(name); info.appendChild(meta);
 
     const acts = document.createElement('div');
     acts.className = 'acts';
-
     if (isCurrent) {
-      const saveBtn = document.createElement('button');
-      saveBtn.className = 'btn-save';
-      saveBtn.textContent = '💾 保存';
-      saveBtn.addEventListener('click', ev => {
-        ev.stopPropagation();
-        saveCurrent();
-      });
-      acts.appendChild(saveBtn);
+      const sb = document.createElement('button');
+      sb.className = 'btn-save';
+      sb.textContent = '💾 保存';
+      sb.addEventListener('click', ev => { ev.stopPropagation(); saveCurrent(); });
+      acts.appendChild(sb);
     } else {
-      const loadBtn = document.createElement('button');
-      loadBtn.className = 'btn-load';
-      loadBtn.textContent = '▶ 加载';
-      loadBtn.addEventListener('click', ev => {
-        ev.stopPropagation();
-        loadSave(save.id);
-      });
-      acts.appendChild(loadBtn);
+      const lb = document.createElement('button');
+      lb.className = 'btn-load';
+      lb.textContent = '▶ 加载';
+      lb.addEventListener('click', ev => { ev.stopPropagation(); loadSave(save.id); });
+      acts.appendChild(lb);
     }
+    const eb = document.createElement('button');
+    eb.className = 'btn-export';
+    eb.textContent = '⬇ 导出';
+    eb.addEventListener('click', ev => { ev.stopPropagation(); exportSave(save.id); });
+    acts.appendChild(eb);
+    const db = document.createElement('button');
+    db.className = 'btn-del';
+    db.textContent = '✕ 删除';
+    db.addEventListener('click', ev => { ev.stopPropagation(); deleteSave(save.id); });
+    acts.appendChild(db);
 
-    const exportBtn = document.createElement('button');
-    exportBtn.className = 'btn-export';
-    exportBtn.textContent = '⬇ 导出';
-    exportBtn.addEventListener('click', ev => {
-      ev.stopPropagation();
-      exportSave(save.id);
-    });
-    acts.appendChild(exportBtn);
-
-    const delBtn = document.createElement('button');
-    delBtn.className = 'btn-del';
-    delBtn.textContent = '✕ 删除';
-    delBtn.addEventListener('click', ev => {
-      ev.stopPropagation();
-      deleteSave(save.id);
-    });
-    acts.appendChild(delBtn);
-
-    item.appendChild(info);
-    item.appendChild(acts);
+    item.appendChild(info); item.appendChild(acts);
     list.appendChild(item);
   }
 }
 
-/* ---- 打开 / 关闭弹窗 ---- */
 function openSaveModal(isStartup) {
   const modal = document.getElementById('saveModal');
   const title = document.getElementById('modalTitle');
   const subtitle = document.getElementById('modalSubtitle');
   const newBtn = document.getElementById('btnNewSave');
   const closeBtn = document.getElementById('modalClose');
-
   if (isStartup) {
     modal.classList.add('startup');
     title.childNodes[0].nodeValue = '🌌 宇宙模拟器';
@@ -1977,16 +1746,12 @@ function openSaveModal(isStartup) {
     newBtn.textContent = '＋ 另存为新存档';
     closeBtn.style.display = '';
   }
-
   renderSaveList();
   modal.classList.add('open');
 }
 
-function closeSaveModal() {
-  document.getElementById('saveModal').classList.remove('open');
-}
+function closeSaveModal() { document.getElementById('saveModal').classList.remove('open'); }
 
-/* ---- 进入游戏 ---- */
 function enterGame(saveId) {
   inGame = true;
   if (saveId) currentSaveId = saveId;
@@ -1995,33 +1760,25 @@ function enterGame(saveId) {
   lastT = performance.now();
 }
 
-/* ---- 事件绑定 ---- */
 document.getElementById('btnOpenSave').addEventListener('click', ev => {
   ev.stopPropagation();
   openSaveModal(false);
 });
-
 document.getElementById('btnSaveQuick').addEventListener('click', ev => {
   ev.stopPropagation();
   saveCurrent();
 });
-
 document.getElementById('modalClose').addEventListener('click', ev => {
   ev.stopPropagation();
   closeSaveModal();
 });
 document.getElementById('saveModal').addEventListener('click', ev => {
-  if (ev.target.id === 'saveModal' && !ev.target.classList.contains('startup')) {
-    closeSaveModal();
-  }
+  if (ev.target.id === 'saveModal' && !ev.target.classList.contains('startup')) closeSaveModal();
 });
 document.getElementById('btnNewSave').addEventListener('click', ev => {
   ev.stopPropagation();
-  if (inGame) {
-    saveAsNew();
-  } else {
-    createEmptyUniverse();
-  }
+  if (inGame) saveAsNew();
+  else createEmptyUniverse();
 });
 document.getElementById('btnImportSave').addEventListener('click', ev => {
   ev.stopPropagation();
@@ -2045,13 +1802,9 @@ const modeBtns = {
 };
 
 function updateCursor() {
-  if (activePointers.size > 0) {
-    canvas.style.cursor = 'grabbing';
-  } else if (mode === 'delete' || mode === 'follow') {
-    canvas.style.cursor = 'pointer';
-  } else {
-    canvas.style.cursor = 'crosshair';
-  }
+  if (activePointers.size > 0) canvas.style.cursor = 'grabbing';
+  else if (mode === 'delete' || mode === 'follow') canvas.style.cursor = 'pointer';
+  else canvas.style.cursor = 'crosshair';
 }
 
 function buildTypeButtons() {
@@ -2076,22 +1829,15 @@ function buildTypeButtons() {
     typeRow.appendChild(span);
     return;
   }
-
   const table = CATEGORIES[mode].types;
   const current = catType[mode];
-
   for (const [key, t] of Object.entries(table)) {
     const btn = document.createElement('button');
     btn.className = 'dot';
     btn.style.setProperty('--c', `rgb(${t.rgb.join(',')})`);
-
     const isWatery = !!t.water;
-    btn.textContent = (mode === 'star')
-      ? t.name
-      : `${t.name}·${isWatery ? '含水' : '无水'}`;
-
+    btn.textContent = (mode === 'star') ? t.name : `${t.name}·${isWatery ? '含水' : '无水'}`;
     if (key === current) btn.classList.add('active');
-
     (function(k){
       btn.addEventListener('click', function(ev){
         ev.stopPropagation();
@@ -2099,7 +1845,6 @@ function buildTypeButtons() {
         buildTypeButtons();
       });
     })(key);
-
     typeRow.appendChild(btn);
   }
 }
@@ -2117,12 +1862,10 @@ function bindButton(id, handler) {
   const el = document.getElementById(id);
   if (!el) return;
   el.addEventListener('click', function(ev){
-    ev.stopPropagation();
-    ev.preventDefault();
-    handler(ev);
+    ev.stopPropagation(); ev.preventDefault(); handler(ev);
   });
   el.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); });
-  el.addEventListener('touchstart',  function(ev){ ev.stopPropagation(); }, {passive:true});
+  el.addEventListener('touchstart', function(ev){ ev.stopPropagation(); }, {passive:true});
 }
 
 bindButton('modeStar',      () => setMode('star'));
@@ -2157,14 +1900,9 @@ bindButton('btnHabitable', () => {
   document.getElementById('btnHabitable').classList.toggle('active', showHabitableZone);
 });
 
-bindButton('btnPause', () => {
-  togglePause();
-});
+bindButton('btnPause', () => { togglePause(); });
 
-bindButton('btnResetView', () => {
-  resetView();
-  selectedBody = null;
-});
+bindButton('btnResetView', () => { resetView(); selectedBody = null; });
 
 bindButton('btnClear', () => {
   bodies = [];
@@ -2181,40 +1919,25 @@ bindButton('btnClear', () => {
 window.addEventListener('keydown', e => {
   const tag = (e.target && e.target.tagName ? e.target.tagName : '').toUpperCase();
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'BUTTON') return;
-
   const modalOpen = document.getElementById('saveModal').classList.contains('open');
   const isStartup = document.getElementById('saveModal').classList.contains('startup');
-
   if (isStartup) return;
-
   if (modalOpen) {
     if (e.key === 'Escape') closeSaveModal();
     return;
   }
-
   if (!inGame) return;
-
   const key = e.key;
 
-  if (key === ' ') {
-    e.preventDefault();
-    togglePause();
-    return;
-  }
-  if (key === 'r' || key === 'R') {
-    resetView();
-    selectedBody = null;
-    return;
-  }
+  if (key === ' ') { e.preventDefault(); togglePause(); return; }
+  if (key === 'r' || key === 'R') { resetView(); selectedBody = null; return; }
   if (key === 'h' || key === 'H') {
     showHabitableZone = !showHabitableZone;
     document.getElementById('btnHabitable').classList.toggle('active', showHabitableZone);
     return;
   }
   if ((key === 's' || key === 'S') && (e.ctrlKey || e.metaKey)) {
-    e.preventDefault();
-    saveCurrent();
-    return;
+    e.preventDefault(); saveCurrent(); return;
   }
   if (key === 'f' || key === 'F') { setMode('follow'); return; }
   if (key === '1') { setMode('star');      return; }
@@ -2225,26 +1948,12 @@ window.addEventListener('keydown', e => {
   if (key === '6') { setMode('delete');    return; }
 
   if (key === 'Delete' || key === 'Backspace') {
-    if (selectedBody) {
-      e.preventDefault();
-      deleteBody(selectedBody);
-    }
+    if (selectedBody) { e.preventDefault(); deleteBody(selectedBody); }
     return;
   }
-  if (key === 'Escape') {
-    selectedBody = null;
-    return;
-  }
-  if (key === '=' || key === '+' || key === 'Add') {
-    e.preventDefault();
-    zoomBy(1.25);
-    return;
-  }
-  if (key === '-' || key === '_' || key === 'Subtract') {
-    e.preventDefault();
-    zoomBy(1 / 1.25);
-    return;
-  }
+  if (key === 'Escape') { selectedBody = null; return; }
+  if (key === '=' || key === '+' || key === 'Add') { e.preventDefault(); zoomBy(1.25); return; }
+  if (key === '-' || key === '_' || key === 'Subtract') { e.preventDefault(); zoomBy(1/1.25); return; }
   if (key === 'ArrowUp')    { e.preventDefault(); panByKey( 0,  1); return; }
   if (key === 'ArrowDown')  { e.preventDefault(); panByKey( 0, -1); return; }
   if (key === 'ArrowLeft')  { e.preventDefault(); panByKey(-1,  0); return; }
@@ -2257,39 +1966,27 @@ let panState   = null;
 let pinchState = null;
 let isGesturing = false;
 
-function refreshGesturing() {
-  isGesturing = activePointers.size > 0;
-}
+function refreshGesturing() { isGesturing = activePointers.size > 0; }
 
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 
 canvas.addEventListener('pointerdown', e => {
   if (!inGame) return;
   if (e.target !== canvas) return;
-
   const isPanButton = (e.button === 1 || e.button === 2);
-
   activePointers.set(e.pointerId, {
-    id: e.pointerId,
-    button: e.button,
+    id: e.pointerId, button: e.button,
     x: e.clientX, y: e.clientY,
     startX: e.clientX, startY: e.clientY,
     startTime: performance.now(),
-    moved: isPanButton,
-    isPan: isPanButton
+    moved: isPanButton, isPan: isPanButton
   });
   refreshGesturing();
   updateCursor();
 
   if (activePointers.size === 1) {
     const p = activePointers.get(e.pointerId);
-    panState = {
-      startCamX: camX,
-      startCamY: camY,
-      startScale: camScale,
-      startX: p.startX,
-      startY: p.startY
-    };
+    panState = { startCamX: camX, startCamY: camY, startScale: camScale, startX: p.startX, startY: p.startY };
     pinchState = null;
   } else if (activePointers.size === 2) {
     const [a, b] = [...activePointers.values()];
@@ -2307,56 +2004,37 @@ canvas.addEventListener('pointerdown', e => {
 
 canvas.addEventListener('pointermove', e => {
   if (!inGame) return;
-
-  if (e.pointerType === 'mouse') {
-    mouseX = e.clientX;
-    mouseY = e.clientY;
-  }
-
+  if (e.pointerType === 'mouse') { mouseX = e.clientX; mouseY = e.clientY; }
   const p = activePointers.get(e.pointerId);
   if (!p) return;
-
-  p.x = e.clientX;
-  p.y = e.clientY;
-
-  const ddx = p.x - p.startX;
-  const ddy = p.y - p.startY;
+  p.x = e.clientX; p.y = e.clientY;
+  const ddx = p.x - p.startX, ddy = p.y - p.startY;
   if (!p.moved && Math.hypot(ddx, ddy) > 8) p.moved = true;
 
   if (activePointers.size === 1 && panState) {
     const dx = p.x - panState.startX;
     const dy = p.y - panState.startY;
-
     const newCamX = panState.startCamX - dx / panState.startScale;
     const newCamY = panState.startCamY + dy / panState.startScale;
-
     const ref = getRefPoint();
     userPanX = newCamX - ref.x;
     userPanY = newCamY - ref.y;
-
     camX = camTarget.x = newCamX;
     camY = camTarget.y = newCamY;
-  }
-  else if (activePointers.size === 2 && pinchState) {
+  } else if (activePointers.size === 2 && pinchState) {
     const [a, b] = [...activePointers.values()];
     const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
     const factor = dist / pinchState.startDist;
-
     const newScale = Math.max(0.5, Math.min(1e6, pinchState.startScale * factor));
-
     const cx = (a.x + b.x) * 0.5;
     const cy = (a.y + b.y) * 0.5;
-
     const newCamX = pinchState.anchorWX - (cx - W * 0.5) / newScale;
     const newCamY = pinchState.anchorWY + (cy - H * 0.5) / newScale;
-
     const base = autoBaseScale();
     userZoom = Math.max(0.05, Math.min(60, newScale / base));
-
     const ref = getRefPoint();
     userPanX = newCamX - ref.x;
     userPanY = newCamY - ref.y;
-
     camX = camTarget.x = newCamX;
     camY = camTarget.y = newCamY;
     camScale = camTarget.s = newScale;
@@ -2366,7 +2044,6 @@ canvas.addEventListener('pointermove', e => {
 function releasePointer(e) {
   const p = activePointers.get(e.pointerId);
   if (!p) return;
-
   activePointers.delete(e.pointerId);
   refreshGesturing();
   updateCursor();
@@ -2375,19 +2052,11 @@ function releasePointer(e) {
       performance.now() - p.startTime < 500 && inGame) {
     handleClick(e.clientX, e.clientY);
   }
-
   if (activePointers.size === 0) {
-    panState = null;
-    pinchState = null;
+    panState = null; pinchState = null;
   } else if (activePointers.size === 1) {
     const rem = [...activePointers.values()][0];
-    panState = {
-      startCamX: camX,
-      startCamY: camY,
-      startScale: camScale,
-      startX: rem.x,
-      startY: rem.y
-    };
+    panState = { startCamX: camX, startCamY: camY, startScale: camScale, startX: rem.x, startY: rem.y };
     pinchState = null;
     rem.moved = true;
   }
@@ -2402,20 +2071,14 @@ function handleClick(px, py) {
     if (target) deleteBody(target);
     return;
   }
-
   if (mode === 'follow') {
     const target = findBodyAtScreen(px, py);
-    if (target) {
-      selectedBody = (selectedBody === target) ? null : target;
-    } else {
-      selectedBody = null;
-    }
+    if (target) selectedBody = (selectedBody === target) ? null : target;
+    else selectedBody = null;
     return;
   }
-
   const wx = camX + (px - W * 0.5) / camScale;
   const wy = camY - (py - H * 0.5) / camScale;
-
   if (mode === 'satellite') {
     const host = findHostForSatellite(px, py);
     if (!host) return;
@@ -2431,30 +2094,23 @@ canvas.addEventListener('wheel', e => {
   e.preventDefault();
   const factor = Math.exp(-e.deltaY * 0.0015);
   const mx = e.clientX, my = e.clientY;
-
   const wx = camX + (mx - W * 0.5) / camScale;
   const wy = camY - (my - H * 0.5) / camScale;
-
   const base = autoBaseScale();
   userZoom = Math.max(0.05, Math.min(60, userZoom * factor));
   const newScale = base * userZoom;
-
   const newCamX = wx - (mx - W * 0.5) / newScale;
   const newCamY = wy + (my - H * 0.5) / newScale;
-
   const ref = getRefPoint();
   userPanX = newCamX - ref.x;
   userPanY = newCamY - ref.y;
-
   camX = camTarget.x = newCamX;
   camY = camTarget.y = newCamY;
   camScale = camTarget.s = newScale;
 }, { passive: false });
 
 canvas.addEventListener('pointerleave', e => {
-  if (e.pointerType === 'mouse') {
-    mouseX = -1; mouseY = -1; hoverBody = null;
-  }
+  if (e.pointerType === 'mouse') { mouseX = -1; mouseY = -1; hoverBody = null; }
 });
 
 /* ===================== 主循环 ===================== */
@@ -2462,11 +2118,9 @@ let lastT = performance.now();
 
 function frame(now) {
   requestAnimationFrame(frame);
-
   let dt = (now - lastT) / 1000;
   lastT = now;
   if (dt > 0.05) dt = 0.05;
-
   if (!inGame) return;
 
   if (!paused && bodies.length) {
@@ -2477,20 +2131,15 @@ function frame(now) {
       acc -= usedH;
       simTime += usedH;
       steps++;
-      if (simTime >= nextSample) {
-        sampleTrails();
-        nextSample += SAMPLE_DT;
-      }
+      if (simTime >= nextSample) { sampleTrails(); nextSample += SAMPLE_DT; }
     }
     if (acc > BASE_STEP * MAX_STEPS) acc = 0;
-
     const simDt = simTime - prevSimTime;
     prevSimTime = simTime;
     if (simDt > 0) updateLife(simDt);
   } else {
     prevSimTime = simTime;
   }
-
   updateCamera(dt);
   render();
   updateHUD();
@@ -2502,9 +2151,7 @@ setMode('star');
 buildTypeButtons();
 updateCursor();
 loadSavesFromStorage();
-
 openSaveModal(true);
-
 requestAnimationFrame(frame);
 </script>
 </body>
