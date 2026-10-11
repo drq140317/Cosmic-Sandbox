@@ -14,6 +14,7 @@
     display: block; position: fixed; inset: 0;
     z-index: 0;
     touch-action: none;
+    cursor: crosshair;
   }
 
   .hud {
@@ -53,7 +54,9 @@
     user-select: none;
     -webkit-user-select: none;
     pointer-events: auto;
+    transition: background .12s, border-color .12s, color .12s;
   }
+  button:hover { background: #1a2230; border-color: #3a4a60; }
   button:active { background: #1c3554; }
   button.active { background: #1c3554; border-color: #3f7fd0; color: #d7e8ff; }
   button.danger.active { background: #4a1c1c; border-color: #d05555; color: #ffd7d7; }
@@ -75,10 +78,12 @@
 
   .tip {
     position: fixed; right: 12px; top: 60px; text-align: right;
-    color: #4f5b6b; font: 11px/1.6 ui-monospace, Menlo, Consolas, monospace;
+    color: #4f5b6b; font: 11px/1.7 ui-monospace, Menlo, Consolas, monospace;
     pointer-events: none;
     z-index: 50;
+    text-shadow: 0 0 8px #000;
   }
+  .tip b { color: #7a88a0; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -88,12 +93,12 @@
 <div class="panel">
   <div class="row">
     <span class="lbl">模式</span>
-    <button id="modeStar" class="active">✦ 恒星</button>
-    <button id="modePlanet">● 行星</button>
-    <button id="modeAsteroid">· 小行星</button>
-    <button id="modeSatellite">◦ 卫星</button>
-    <button id="modeFollow" class="follow">◎ 跟随</button>
-    <button id="modeDelete" class="danger">✕ 删除</button>
+    <button id="modeStar" class="active" title="快捷键 1">✦ 恒星</button>
+    <button id="modePlanet" title="快捷键 2">● 行星</button>
+    <button id="modeAsteroid" title="快捷键 3">· 小行星</button>
+    <button id="modeSatellite" title="快捷键 4">◦ 卫星</button>
+    <button id="modeFollow" class="follow" title="快捷键 5">◎ 跟随</button>
+    <button id="modeDelete" class="danger" title="快捷键 6">✕ 删除</button>
   </div>
 
   <div class="row">
@@ -114,24 +119,24 @@
     <label class="lbl">速度 <input id="speed" type="range" min="0.1" max="4" step="0.1" value="1"></label>
     <span class="lbl" id="speedVal">1.0×</span>
     <span class="sep"></span>
-    <button id="btnHabitable" class="bio">◎ 宜居带</button>
-    <button id="btnPause">暂停</button>
-    <button id="btnResetView">重置视角</button>
+    <button id="btnHabitable" class="bio" title="快捷键 H">◎ 宜居带</button>
+    <button id="btnPause" title="空格">暂停</button>
+    <button id="btnResetView" title="快捷键 R">重置视角</button>
     <button id="btnClear" class="danger">全部清空</button>
   </div>
 </div>
 
 <div class="tip">
-  单指滑动平移 · 双指捏合缩放<br>
-  轻点空白处放置天体<br>
-  跟随模式：点天体，视角锁定它<br>
-  删除模式：点谁删谁
+  <b>触屏</b> 单指滑动 · 双指捏合 · 轻点放置<br>
+  <b>电脑</b> 右键拖拽平移 · 滚轮缩放 · 左键放置<br>
+  <b>键盘</b> 空格暂停 · R重置 · H宜居带 · 1-6模式<br>
+  <b>键盘</b> F跟随 · Del删除选中 · Esc取消 · 方向键平移
 </div>
 
 <script>
 /* =============================================================
    宇宙模拟器 —— 恒星 / 行星 / 小行星 / 卫星 沙盒
-   · 手机触屏友好：单指平移，双指捏合缩放，轻点放置/删除
+   · 手机触屏 + 电脑键鼠 双端友好
    · 卫星绑定宿主：绕宿主快速旋转
    · 小行星撞击：卫星拦截 / 生命重置或死亡
    · 天体碰撞：小的被销毁，质量加到大的
@@ -174,11 +179,8 @@ const CHUNK     = 16;
 const TWO_PI    = Math.PI * 2;
 
 const SATELLITE_SPEED_MUL = 12;
-
-/* 小行星撞击行星判定半径（比通用碰撞半径宽松） */
 const IMPACT_BASE_R     = 0.28;
 const IMPACT_R_PER_SIZE = 0.14;
-
 const SAT_INTERCEPT_PER = 0.35;
 const SAT_INTERCEPT_MAX = 0.75;
 
@@ -244,11 +246,7 @@ let mouseX = -1, mouseY = -1;
 let hoverBody = null;
 
 let showHabitableZone = false;
-
-/* 跟随视角：选中的天体（null = 未选中） */
 let selectedBody = null;
-
-/* 撞击视觉事件列表 */
 let impactEvents = [];
 
 /* ===================== 工具 ===================== */
@@ -262,7 +260,6 @@ function getCentroid() {
   return { x: cx, y: cy, M };
 }
 
-/* 相机参考点：跟随模式下是选中天体，否则是质心 */
 function getRefPoint() {
   if (selectedBody && bodies.indexOf(selectedBody) >= 0) {
     return { x: selectedBody.x, y: selectedBody.y };
@@ -453,7 +450,6 @@ function killLife(b, color) {
 }
 
 /* ===================== 碰撞处理 ===================== */
-/* 通用碰撞半径（世界单位） */
 function collisionRadius(b) {
   if (b.kind === 'star')      return 0.10 * b.rMul * b.sizeMul;
   if (b.kind === 'planet')    return 0.06 * b.sizeMul;
@@ -462,11 +458,6 @@ function collisionRadius(b) {
   return 0.05;
 }
 
-/* 处理所有天体碰撞：
-   · 小行星撞行星 → 卫星拦截 / 生命伤害
-   · 其他碰撞 → 小的被销毁，质量加到大的
-   卫星不参与碰撞（始终绑定宿主）
-*/
 function resolveCollisions(simDt) {
   const toRemove = new Set();
   const events = [];
@@ -492,7 +483,6 @@ function resolveCollisions(simDt) {
       let isAsteroidImpact = false;
 
       if ((biAst && bjPla) || (bjAst && biPla)) {
-        /* 小行星撞行星：用宽松的判定半径 */
         const planet = biPla ? bi : bj;
         const r = IMPACT_BASE_R + IMPACT_R_PER_SIZE * planet.sizeMul;
         if (d < r) {
@@ -500,7 +490,6 @@ function resolveCollisions(simDt) {
           isAsteroidImpact = true;
         }
       } else {
-        /* 通用碰撞 */
         const rA = collisionRadius(bi);
         const rB = collisionRadius(bj);
         if (d < rA + rB) {
@@ -518,7 +507,6 @@ function resolveCollisions(simDt) {
         const planet = biPla ? bi : bj;
         const asteroid = biAst ? bi : bj;
 
-        /* 统计行星的卫星 */
         let satCount = 0;
         for (const s of bodies) {
           if (s.kind === 'satellite' && s.host === planet && !toRemove.has(s)) satCount++;
@@ -531,11 +519,9 @@ function resolveCollisions(simDt) {
         }
 
         if (intercepted) {
-          /* 卫星拦截 —— 行星不受伤害 */
           events.push({ x: planet.x, y: planet.y, t: 0, type: 'shield' });
           toRemove.add(asteroid);
         } else {
-          /* 伤害行星 */
           if (planet.lifeStage === 'gestating') {
             planet.gestationTimer = 10 + Math.random() * 20;
             planet.flash = 0.9;
@@ -552,7 +538,6 @@ function resolveCollisions(simDt) {
         }
       } else {
         /* 通用碰撞：小的被销毁，质量加到大的 */
-        /* 若 small 有卫星，转移到 big */
         for (const s of bodies) {
           if (s.kind === 'satellite' && s.host === small && !toRemove.has(s)) {
             s.host = big;
@@ -565,16 +550,13 @@ function resolveCollisions(simDt) {
           }
         }
 
-        /* 若 small 是行星且带生命 —— 被吞噬 */
         if (small.kind === 'planet' && (small.lifeStage === 'alive' || small.life > 0)) {
           killLife(small, [255, 100, 60]);
         }
 
         events.push({ x: big.x, y: big.y, t: 0, type: 'impact' });
 
-        /* 质量合并 */
         big.m += small.m;
-        /* 视觉大小稍微增加 */
         big.sizeMul = Math.min(3.5, big.sizeMul * Math.pow(1 + small.m / big.m, 0.10));
 
         toRemove.add(small);
@@ -754,7 +736,6 @@ function autoBaseScale() {
 function updateCamera(dt) {
   if (isGesturing) return;
 
-  /* 跟随模式：优先跟随选中天体 */
   if (selectedBody && bodies.indexOf(selectedBody) >= 0) {
     const k = Math.min(1, dt * 16);
     camTarget.x = selectedBody.x + userPanX;
@@ -797,6 +778,24 @@ function resetView() {
   userPanY = 0;
 }
 
+/* ===================== 键盘辅助 ===================== */
+function panByKey(dx, dy) {
+  const step = 90 / camScale;
+  userPanX += dx * step;
+  userPanY += dy * step;
+}
+
+function zoomBy(factor) {
+  userZoom = Math.max(0.05, Math.min(60, userZoom * factor));
+}
+
+function togglePause() {
+  paused = !paused;
+  const btn = document.getElementById('btnPause');
+  btn.textContent = paused ? '继续' : '暂停';
+  lastT = performance.now();
+}
+
 /* ===================== 渲染尺寸 ===================== */
 function coreRadius(b) {
   if (b.kind === 'star')      return 5.5 * b.rMul * b.sizeMul;
@@ -831,7 +830,6 @@ function render() {
     hoverBody = null;
   }
 
-  /* 卫星模式：高亮可宿主天体 */
   if (mode === 'satellite') {
     const pulse = 0.55 + 0.35 * Math.sin(simTime * 3.0 + performance.now() * 0.002);
     for (const b of bodies) {
@@ -849,7 +847,6 @@ function render() {
     }
   }
 
-  /* 宜居带 */
   if (showHabitableZone) {
     for (const b of bodies) {
       if (b.kind !== 'star') continue;
@@ -935,7 +932,6 @@ function render() {
     const isStar = b.kind === 'star';
     const R = core * (isStar ? 6.5 : 5);
 
-    /* 孕育中光晕 */
     if (b.kind === 'planet' && b.lifeStage === 'gestating') {
       const prog = 1 - Math.max(0, b.gestationTimer) / 30;
       const pulse = 0.55 + 0.45 * Math.sin(simTime * 3.0);
@@ -949,7 +945,6 @@ function render() {
       ctx.beginPath(); ctx.arc(x, y, gr, 0, TWO_PI); ctx.fill();
     }
 
-    /* 生命光晕 */
     if (b.kind === 'planet' && b.life > 0.02) {
       const lifeR = core * (2.2 + b.life * 3.4) * 4;
       const pulse = 1 + 0.06 * Math.sin(simTime * 2.4);
@@ -964,7 +959,6 @@ function render() {
       ctx.beginPath(); ctx.arc(x, y, lifeR * pulse, 0, TWO_PI); ctx.fill();
     }
 
-    /* 闪光 */
     if (b.kind === 'planet' && b.flash > 0 && b.flashColor) {
       const [fr, fg, fb] = b.flashColor;
       const flashR = core * (3.0 + (1 - b.flash) * 6.0) * 4;
@@ -977,7 +971,6 @@ function render() {
       ctx.beginPath(); ctx.arc(x, y, flashR, 0, TWO_PI); ctx.fill();
     }
 
-    /* 主光晕 */
     const grd = ctx.createRadialGradient(x, y, 0, x, y, R);
     if (isStar) {
       grd.addColorStop(0.00, 'rgba(255,255,255,0.98)');
@@ -1022,7 +1015,6 @@ function render() {
       ctx.globalAlpha = 1;
     }
 
-    /* 跟随选中高亮 */
     if (b === selectedBody) {
       const t = performance.now() * 0.003;
       const rr = core * 3.2 + 8 + Math.sin(t) * 3;
@@ -1084,7 +1076,6 @@ function render() {
   }
   ctx.globalAlpha = 1;
 
-  /* 放置预览圈 */
   if (mode !== 'delete' && mode !== 'satellite' && mode !== 'follow' &&
       mouseX >= 0 && !isGesturing) {
     ctx.globalCompositeOperation = 'source-over';
@@ -1095,7 +1086,6 @@ function render() {
     ctx.setLineDash([]);
   }
 
-  /* 删除模式高亮 */
   if (mode === 'delete' && hoverBody) {
     const x = SX(hoverBody.x), y = SY(hoverBody.y);
     ctx.globalCompositeOperation = 'source-over';
@@ -1186,6 +1176,16 @@ const modeBtns = {
   delete:    document.getElementById('modeDelete'),
 };
 
+function updateCursor() {
+  if (activePointers.size > 0) {
+    canvas.style.cursor = 'grabbing';
+  } else if (mode === 'delete' || mode === 'follow') {
+    canvas.style.cursor = 'pointer';
+  } else {
+    canvas.style.cursor = 'crosshair';
+  }
+}
+
 function buildTypeButtons() {
   typeRow.innerHTML = '';
   if (mode === 'delete') {
@@ -1242,6 +1242,7 @@ function setMode(m) {
     if (modeBtns[k]) modeBtns[k].classList.toggle('active', k === m);
   }
   buildTypeButtons();
+  updateCursor();
 }
 
 function bindButton(id, handler) {
@@ -1288,15 +1289,12 @@ bindButton('btnHabitable', () => {
   document.getElementById('btnHabitable').classList.toggle('active', showHabitableZone);
 });
 
-bindButton('btnPause', (e) => {
-  paused = !paused;
-  e.target.textContent = paused ? '继续' : '暂停';
-  lastT = performance.now();
+bindButton('btnPause', () => {
+  togglePause();
 });
 
 bindButton('btnResetView', () => {
   resetView();
-  /* 重置视角也取消跟随 */
   selectedBody = null;
 });
 
@@ -1309,6 +1307,63 @@ bindButton('btnClear', () => {
   hoverBody = null;
   resetView();
   lastT = performance.now();
+});
+
+/* ===================== 键盘快捷键 ===================== */
+window.addEventListener('keydown', e => {
+  const tag = (e.target && e.target.tagName ? e.target.tagName : '').toUpperCase();
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'BUTTON') return;
+
+  const key = e.key;
+
+  if (key === ' ') {
+    e.preventDefault();
+    togglePause();
+    return;
+  }
+  if (key === 'r' || key === 'R') {
+    resetView();
+    selectedBody = null;
+    return;
+  }
+  if (key === 'h' || key === 'H') {
+    showHabitableZone = !showHabitableZone;
+    document.getElementById('btnHabitable').classList.toggle('active', showHabitableZone);
+    return;
+  }
+  if (key === 'f' || key === 'F') { setMode('follow'); return; }
+  if (key === '1') { setMode('star');      return; }
+  if (key === '2') { setMode('planet');    return; }
+  if (key === '3') { setMode('asteroid');  return; }
+  if (key === '4') { setMode('satellite'); return; }
+  if (key === '5') { setMode('follow');    return; }
+  if (key === '6') { setMode('delete');    return; }
+
+  if (key === 'Delete' || key === 'Backspace') {
+    if (selectedBody) {
+      e.preventDefault();
+      deleteBody(selectedBody);
+    }
+    return;
+  }
+  if (key === 'Escape') {
+    selectedBody = null;
+    return;
+  }
+  if (key === '=' || key === '+' || key === 'Add') {
+    e.preventDefault();
+    zoomBy(1.25);
+    return;
+  }
+  if (key === '-' || key === '_' || key === 'Subtract') {
+    e.preventDefault();
+    zoomBy(1 / 1.25);
+    return;
+  }
+  if (key === 'ArrowUp')    { e.preventDefault(); panByKey( 0,  1); return; }
+  if (key === 'ArrowDown')  { e.preventDefault(); panByKey( 0, -1); return; }
+  if (key === 'ArrowLeft')  { e.preventDefault(); panByKey(-1,  0); return; }
+  if (key === 'ArrowRight') { e.preventDefault(); panByKey( 1,  0); return; }
 });
 
 /* ===================== 画布手势交互 ===================== */
@@ -1326,14 +1381,20 @@ canvas.addEventListener('contextmenu', e => e.preventDefault());
 canvas.addEventListener('pointerdown', e => {
   if (e.target !== canvas) return;
 
+  /* 中键 / 右键 → 直接进入拖拽平移，不放置 */
+  const isPanButton = (e.button === 1 || e.button === 2);
+
   activePointers.set(e.pointerId, {
     id: e.pointerId,
+    button: e.button,
     x: e.clientX, y: e.clientY,
     startX: e.clientX, startY: e.clientY,
     startTime: performance.now(),
-    moved: false
+    moved: isPanButton,   /* 平移按钮视为已移动，避免松手后触发点击 */
+    isPan: isPanButton
   });
   refreshGesturing();
+  updateCursor();
 
   if (activePointers.size === 1) {
     const p = activePointers.get(e.pointerId);
@@ -1382,7 +1443,6 @@ canvas.addEventListener('pointermove', e => {
     const newCamX = panState.startCamX - dx / panState.startScale;
     const newCamY = panState.startCamY + dy / panState.startScale;
 
-    /* 用参考点（跟随模式 = 选中天体，否则 = 质心）换算 userPan */
     const ref = getRefPoint();
     userPanX = newCamX - ref.x;
     userPanY = newCamY - ref.y;
@@ -1422,8 +1482,10 @@ function releasePointer(e) {
 
   activePointers.delete(e.pointerId);
   refreshGesturing();
+  updateCursor();
 
-  if (p && !p.moved && activePointers.size === 0 &&
+  /* 轻点判定：没移动过 + 不是平移按钮 + 最后一根手指 + 时间够短 */
+  if (p && !p.moved && !p.isPan && activePointers.size === 0 &&
       performance.now() - p.startTime < 500) {
     handleClick(e.clientX, e.clientY);
   }
@@ -1458,14 +1520,8 @@ function handleClick(px, py) {
   if (mode === 'follow') {
     const target = findBodyAtScreen(px, py);
     if (target) {
-      if (selectedBody === target) {
-        /* 再次点击同一天体 → 取消跟随 */
-        selectedBody = null;
-      } else {
-        selectedBody = target;
-      }
+      selectedBody = (selectedBody === target) ? null : target;
     } else {
-      /* 点击空白取消 */
       selectedBody = null;
     }
     return;
@@ -1555,6 +1611,7 @@ function frame(now) {
 resize();
 setMode('star');
 buildTypeButtons();
+updateCursor();
 requestAnimationFrame(frame);
 </script>
 </body>
