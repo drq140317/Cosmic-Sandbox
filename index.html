@@ -383,7 +383,8 @@
 /* =============================================================
    宇宙模拟器 —— 恒星 / 行星 / 小行星 / 卫星 沙盒
    · 启动时进入存档页
-   · 天体合并：动量守恒 + 位置取质心（相机不再跳）
+   · 天体合并：动量守恒 + 位置取质心
+   · 相机：用平滑 smoothMaxD 避免双星椭圆轨道引起的缩放抖动
    · 跟随视角、卫星绑定、生命系统、存档系统
    ============================================================= */
 
@@ -481,6 +482,9 @@ const camTarget = { x: 0, y: 0, s: 220 };
 let userZoom  = 1;
 let userPanX  = 0;
 let userPanY  = 0;
+
+/* ★ 平滑的"系统尺度"，避免双星椭圆轨道近星点引起的缩放抖动 */
+let smoothMaxD = 0.6;
 
 let mode = 'star';
 let catType = { star: 'g', planet: 'terra', asteroid: 'stony', satellite: 'rocky' };
@@ -620,7 +624,8 @@ function vvStep(maxH) {
       if (d < minD) minD = d;
     }
   }
-  const h = Math.min(maxH, minD * 0.01);
+  /* Bug 1 修复：minD 可能为 0，加最小值防止 h=0 死循环 */
+  const h = Math.max(1e-9, Math.min(maxH, minD * 0.01));
 
   for (const b of bodies) {
     if (b.kind === 'satellite') continue;
@@ -766,7 +771,7 @@ function resolveCollisions(simDt) {
           }
           events.push({ x: planet.x, y: planet.y, t: 0, type: 'impact' });
 
-          /* ★ 动量守恒 + 位置取质心，避免相机跳变 */
+          /* 动量守恒 + 位置取质心 */
           const mergedMP = planet.m + asteroid.m;
           planet.vx = (planet.m * planet.vx + asteroid.m * asteroid.vx) / mergedMP;
           planet.vy = (planet.m * planet.vy + asteroid.m * asteroid.vy) / mergedMP;
@@ -774,6 +779,9 @@ function resolveCollisions(simDt) {
           planet.y = (planet.m * planet.y + asteroid.m * asteroid.y) / mergedMP;
           planet.m  = mergedMP;
           planet.sizeMul = Math.min(4.0, sizeFromMass(planet.kind, planet.typeKey, planet.m));
+
+          /* ★ 若跟随的是小行星，改为跟随行星 */
+          if (selectedBody === asteroid) selectedBody = planet;
 
           toRemove.add(asteroid);
         }
@@ -796,7 +804,7 @@ function resolveCollisions(simDt) {
 
         events.push({ x: big.x, y: big.y, t: 0, type: 'impact' });
 
-        /* ★ 动量守恒 + 位置取质心，避免相机跟随质心跳变而"甩出去" */
+        /* 动量守恒 + 位置取质心 */
         const mergedM = big.m + small.m;
         big.vx = (big.m * big.vx + small.m * small.vx) / mergedM;
         big.vy = (big.m * big.vy + small.m * small.vy) / mergedM;
@@ -805,25 +813,18 @@ function resolveCollisions(simDt) {
         big.m  = mergedM;
         big.sizeMul = Math.min(4.0, sizeFromMass(big.kind, big.typeKey, big.m));
 
+        /* ★ 若跟随的是被吸收的天体，直接改为跟随吸收者 */
+        if (selectedBody === small) selectedBody = big;
+
         toRemove.add(small);
       }
     }
   }
 
   if (toRemove.size > 0) {
-    /* 若跟随目标被吸收，改为跟随合并后的天体 */
+    /* 若跟随目标被吸收且未在上面切换，则清空跟随 */
     if (selectedBody && toRemove.has(selectedBody)) {
-      const followSmall = selectedBody;
-      /* 找到与它合并的 big：遍历是复杂的，简单起见直接清空跟随 */
-      /* 更优：本轮 toRemove 里非 follower 的其他天体若有，跟随它 */
-      let newTarget = null;
-      for (const b of bodies) {
-        if (!toRemove.has(b) && b !== followSmall && b.kind !== 'satellite') {
-          newTarget = b; /* 保守选择第一个幸存者 */
-          break;
-        }
-      }
-      selectedBody = newTarget;
+      selectedBody = null;
     }
 
     bodies = bodies.filter(b => !toRemove.has(b));
@@ -916,7 +917,7 @@ function placeBody(kind, typeKey, sizeMulVal, x, y, motion, host) {
   }
 
   bodies.push(b);
-  removeDrift();
+  /* 不再调用 removeDrift()，避免新加天体时改变已有天体速度 */
   computeAccel();
   sampleTrails();
   E0 = totalEnergy();
@@ -966,8 +967,13 @@ function deleteBody(b) {
 }
 
 /* ===================== 相机 ===================== */
+
+/* 计算平滑后的系统尺度：只增不减（极缓慢衰减），避免双星椭圆轨道引起的缩放抖动 */
 function autoBaseScale() {
-  if (!bodies.length) return 220;
+  if (!bodies.length) {
+    smoothMaxD = 0.6;
+    return 220;
+  }
   const { x: cx, y: cy } = getCentroid();
   let maxD = 0.6;
   for (const b of bodies) {
@@ -975,7 +981,15 @@ function autoBaseScale() {
     const d = Math.hypot(b.x - cx, b.y - cy);
     if (d > maxD) maxD = d;
   }
-  return Math.max(Math.min(W, H) * 0.36 / maxD, 0.5);
+
+  /* ★ 平滑：立刻跟上变大的情况，变小则缓慢回落 */
+  if (maxD > smoothMaxD) {
+    smoothMaxD = maxD;
+  } else {
+    smoothMaxD = smoothMaxD * 0.998 + maxD * 0.002;
+  }
+
+  return Math.max(Math.min(W, H) * 0.36 / smoothMaxD, 0.5);
 }
 
 function updateCamera(dt) {
@@ -1019,6 +1033,7 @@ function resetView() {
   userZoom = 1;
   userPanX = 0;
   userPanY = 0;
+  smoothMaxD = 0.6;
 }
 
 /* ===================== 键盘辅助 ===================== */
@@ -1477,6 +1492,7 @@ function deserializeState(data) {
   userZoom = data.userZoom || 1;
   userPanX = data.userPanX || 0;
   userPanY = data.userPanY || 0;
+  smoothMaxD = 0.6;
   showHabitableZone = !!data.showHabitableZone;
   document.getElementById('btnHabitable').classList.toggle('active', showHabitableZone);
   selectedBody = (data.selectedBodyIndex >= 0 && bodies[data.selectedBodyIndex]) ? bodies[data.selectedBodyIndex] : null;
@@ -1537,6 +1553,7 @@ function createEmptyUniverse() {
   camX = 0; camY = 0; camScale = 220;
   camTarget.x = 0; camTarget.y = 0; camTarget.s = 220;
   userZoom = 1; userPanX = 0; userPanY = 0;
+  smoothMaxD = 0.6;
 
   const save = { id: genId(), name: finalName, savedAt: Date.now(), state: serializeState() };
   saves.push(save);
