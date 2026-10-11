@@ -1,0 +1,1561 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>宇宙模拟器 · 沙盒</title>
+<style>
+  html, body {
+    margin: 0; height: 100%; overflow: hidden; background: #04050a;
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none;
+  }
+  canvas {
+    display: block; position: fixed; inset: 0;
+    z-index: 0;
+    touch-action: none;
+  }
+
+  .hud {
+    position: fixed; left: 16px; top: 14px;
+    color: #8d9aab; font: 12px/1.8 ui-monospace, Menlo, Consolas, monospace;
+    pointer-events: none; text-shadow: 0 0 10px #000;
+    z-index: 50;
+  }
+  .hud .t { color: #e8eef6; font-weight: 600; letter-spacing: .5px; }
+  .hud .k { color: #4f5b6b; }
+  .hud .life { color: #6ee7a0; }
+  .hud .warn { color: #ffb36b; }
+  .hud .follow { color: #6cd2ff; }
+
+  .panel {
+    position: fixed; left: 10px; right: 10px; bottom: 10px;
+    display: flex; flex-direction: column; gap: 6px;
+    z-index: 1000;
+    padding: 8px;
+    background: rgba(6, 9, 14, 0.72);
+    border: 1px solid #1a2332;
+    border-radius: 12px;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
+  .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+
+  button {
+    background: #10151d;
+    border: 1px solid #263040;
+    color: #c3cede;
+    padding: 8px 11px;
+    border-radius: 8px;
+    cursor: pointer;
+    font: 12px/1 ui-monospace, Menlo, Consolas, monospace;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+    -webkit-user-select: none;
+    pointer-events: auto;
+  }
+  button:active { background: #1c3554; }
+  button.active { background: #1c3554; border-color: #3f7fd0; color: #d7e8ff; }
+  button.danger.active { background: #4a1c1c; border-color: #d05555; color: #ffd7d7; }
+  button.bio.active { background: #14381f; border-color: #4dbf72; color: #d6ffe3; }
+  button.follow.active { background: #143349; border-color: #4db7f0; color: #d6f0ff; }
+  button.dot::before {
+    content: ''; display: inline-block;
+    width: 8px; height: 8px; border-radius: 50%;
+    margin-right: 5px; vertical-align: middle;
+    background: var(--c, #888); box-shadow: 0 0 8px var(--c, #888);
+  }
+
+  .lbl {
+    color: #6b7789; font: 11px ui-monospace, Menlo, Consolas, monospace;
+    display: flex; align-items: center; gap: 5px;
+  }
+  input[type=range] { width: 80px; accent-color: #4d8fe8; }
+  .sep { width: 1px; height: 18px; background: #263040; margin: 0 2px; }
+
+  .tip {
+    position: fixed; right: 12px; top: 60px; text-align: right;
+    color: #4f5b6b; font: 11px/1.6 ui-monospace, Menlo, Consolas, monospace;
+    pointer-events: none;
+    z-index: 50;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="hud" id="hud"></div>
+
+<div class="panel">
+  <div class="row">
+    <span class="lbl">模式</span>
+    <button id="modeStar" class="active">✦ 恒星</button>
+    <button id="modePlanet">● 行星</button>
+    <button id="modeAsteroid">· 小行星</button>
+    <button id="modeSatellite">◦ 卫星</button>
+    <button id="modeFollow" class="follow">◎ 跟随</button>
+    <button id="modeDelete" class="danger">✕ 删除</button>
+  </div>
+
+  <div class="row">
+    <span class="lbl">类型</span>
+    <div id="typeRow" class="row"></div>
+  </div>
+
+  <div class="row">
+    <span class="lbl">初速</span>
+    <button id="motOrbit" class="active">轨道</button>
+    <button id="motStatic">静止</button>
+    <span class="sep"></span>
+    <label class="lbl">大小 <input id="size" type="range" min="0.5" max="2.5" step="0.1" value="1"></label>
+    <span class="lbl" id="sizeVal">1.0×</span>
+  </div>
+
+  <div class="row">
+    <label class="lbl">速度 <input id="speed" type="range" min="0.1" max="4" step="0.1" value="1"></label>
+    <span class="lbl" id="speedVal">1.0×</span>
+    <span class="sep"></span>
+    <button id="btnHabitable" class="bio">◎ 宜居带</button>
+    <button id="btnPause">暂停</button>
+    <button id="btnResetView">重置视角</button>
+    <button id="btnClear" class="danger">全部清空</button>
+  </div>
+</div>
+
+<div class="tip">
+  单指滑动平移 · 双指捏合缩放<br>
+  轻点空白处放置天体<br>
+  跟随模式：点天体，视角锁定它<br>
+  删除模式：点谁删谁
+</div>
+
+<script>
+/* =============================================================
+   宇宙模拟器 —— 恒星 / 行星 / 小行星 / 卫星 沙盒
+   · 手机触屏友好：单指平移，双指捏合缩放，轻点放置/删除
+   · 卫星绑定宿主：绕宿主快速旋转
+   · 小行星撞击：卫星拦截 / 生命重置或死亡
+   · 天体碰撞：小的被销毁，质量加到大的
+   · 跟随视角：选中天体，相机一直跟随
+   ============================================================= */
+
+const canvas = document.getElementById('c');
+const ctx    = canvas.getContext('2d');
+let W = 0, H = 0, DPR = 1;
+let stars = [];
+
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth; H = window.innerHeight;
+  canvas.width  = Math.round(W * DPR);
+  canvas.height = Math.round(H * DPR);
+  canvas.style.width  = W + 'px';
+  canvas.style.height = H + 'px';
+
+  stars = [];
+  const n = Math.round(W * H / 8000);
+  for (let i = 0; i < n; i++) {
+    stars.push({
+      x: Math.random() * W, y: Math.random() * H,
+      r: Math.random() * 1.3 + 0.25,
+      a: Math.random() * 0.55 + 0.12
+    });
+  }
+}
+window.addEventListener('resize', resize);
+
+/* ===================== 物理常量 ===================== */
+const G         = 1;
+const BASE_STEP = 0.0002;
+const SOFTENING = 0.06;
+const MAX_STEPS = 6000;
+const SAMPLE_DT = 0.02;
+const MAX_TRAIL = 1200;
+const CHUNK     = 16;
+const TWO_PI    = Math.PI * 2;
+
+const SATELLITE_SPEED_MUL = 12;
+
+/* 小行星撞击行星判定半径（比通用碰撞半径宽松） */
+const IMPACT_BASE_R     = 0.28;
+const IMPACT_R_PER_SIZE = 0.14;
+
+const SAT_INTERCEPT_PER = 0.35;
+const SAT_INTERCEPT_MAX = 0.75;
+
+/* ===================== 天体类型表 ===================== */
+const STAR_TYPES = {
+  m: { name: '红矮星', mass: 0.35, rMul: 0.78, rgb: [255, 138, 105] },
+  k: { name: '橙矮星', mass: 0.70, rMul: 0.90, rgb: [255, 182, 120] },
+  g: { name: '类太阳', mass: 1.00, rMul: 1.00, rgb: [255, 202,  92] },
+  o: { name: '蓝巨星', mass: 3.20, rMul: 1.55, rgb: [150, 200, 255] },
+  r: { name: '红巨星', mass: 1.40, rMul: 2.10, rgb: [255, 110,  80] },
+  w: { name: '白矮星', mass: 0.85, rMul: 0.42, rgb: [218, 236, 255] },
+};
+
+const PLANET_TYPES = {
+  rock:   { name: '岩质行星',   mass: 2.5e-4, water: false, rgb: [186, 168, 148] },
+  desert: { name: '沙漠行星',   mass: 3.0e-4, water: false, rgb: [224, 176, 108] },
+  gas:    { name: '气态巨行星', mass: 1.8e-3, water: false, rgb: [232, 190, 140] },
+  terra:  { name: '类地行星',   mass: 4.0e-4, water: true,  rgb: [ 96, 170, 255] },
+  ocean:  { name: '海洋行星',   mass: 5.0e-4, water: true,  rgb: [ 62, 124, 224] },
+  ice:    { name: '冰封行星',   mass: 3.5e-4, water: true,  rgb: [178, 222, 255] },
+};
+
+const ASTEROID_TYPES = {
+  stony: { name: '石质小行星', mass: 2.0e-6, water: false, rgb: [172, 156, 140] },
+  icy:   { name: '冰质小行星', mass: 3.0e-6, water: true,  rgb: [176, 212, 238] },
+};
+
+const SATELLITE_TYPES = {
+  rocky: { name: '岩石卫星', mass: 4.0e-6, water: false, rgb: [196, 196, 202] },
+  icy:   { name: '冰质卫星', mass: 5.5e-6, water: true,  rgb: [190, 222, 250] },
+};
+
+const CATEGORIES = {
+  star:      { label: '恒星',   types: STAR_TYPES },
+  planet:    { label: '行星',   types: PLANET_TYPES },
+  asteroid:  { label: '小行星', types: ASTEROID_TYPES },
+  satellite: { label: '卫星',   types: SATELLITE_TYPES },
+};
+
+/* ===================== 全局状态 ===================== */
+let bodies = [];
+let simTime = 0;
+let prevSimTime = 0;
+let nextSample = 0;
+let acc = 0;
+let paused = false;
+let speed = 1;
+let E0 = 0;
+
+let camX = 0, camY = 0, camScale = 220;
+const camTarget = { x: 0, y: 0, s: 220 };
+
+let userZoom  = 1;
+let userPanX  = 0;
+let userPanY  = 0;
+
+let mode = 'star';
+let catType = { star: 'g', planet: 'terra', asteroid: 'stony', satellite: 'rocky' };
+let placeMotion = 'orbit';
+let sizeMul = 1;
+
+let mouseX = -1, mouseY = -1;
+let hoverBody = null;
+
+let showHabitableZone = false;
+
+/* 跟随视角：选中的天体（null = 未选中） */
+let selectedBody = null;
+
+/* 撞击视觉事件列表 */
+let impactEvents = [];
+
+/* ===================== 工具 ===================== */
+function getCentroid() {
+  let M = 0, cx = 0, cy = 0;
+  for (const b of bodies) {
+    if (b.kind === 'satellite') continue;
+    M += b.m; cx += b.m * b.x; cy += b.m * b.y;
+  }
+  if (M > 0) { cx /= M; cy /= M; }
+  return { x: cx, y: cy, M };
+}
+
+/* 相机参考点：跟随模式下是选中天体，否则是质心 */
+function getRefPoint() {
+  if (selectedBody && bodies.indexOf(selectedBody) >= 0) {
+    return { x: selectedBody.x, y: selectedBody.y };
+  }
+  const { x, y } = getCentroid();
+  return { x: x || 0, y: y || 0 };
+}
+
+/* ===================== 宜居带 ===================== */
+function starLuminosity(star) {
+  return Math.pow(Math.max(star.m, 0.05), 3.0);
+}
+
+function habitableZone(star) {
+  const L = starLuminosity(star);
+  const rIn  = 0.85 * Math.sqrt(L);
+  const rOut = 1.85 * Math.sqrt(L);
+  return { rIn, rOut, L };
+}
+
+function getHabitabilityInfo(body) {
+  let closestStar = null;
+  let closestDist = Infinity;
+  let closestHZ = null;
+
+  for (const s of bodies) {
+    if (s.kind !== 'star') continue;
+    const d = Math.hypot(body.x - s.x, body.y - s.y);
+    if (d < closestDist) {
+      closestDist = d;
+      closestStar = s;
+      closestHZ = habitableZone(s);
+    }
+  }
+
+  if (!closestStar) {
+    return { inHZ: false, tooHot: false, tooCold: true, star: null, dist: 0, hz: null };
+  }
+
+  const tooHot  = closestDist < closestHZ.rIn * 0.75;
+  const tooCold = closestDist > closestHZ.rOut * 1.5;
+  const inHZ    = closestDist >= closestHZ.rIn && closestDist <= closestHZ.rOut;
+
+  return { inHZ, tooHot, tooCold, star: closestStar, dist: closestDist, hz: closestHZ };
+}
+
+function isInHabitableZoneSimple(body) {
+  return getHabitabilityInfo(body).inHZ;
+}
+
+/* ===================== 创建天体 ===================== */
+function createBody(kind, typeKey, sizeMulVal, x, y) {
+  const t = CATEGORIES[kind].types[typeKey];
+  const mass = t.mass * Math.pow(sizeMulVal, 2.5);
+
+  return {
+    kind, typeKey,
+    name: t.name,
+    m: mass,
+    x, y, vx: 0, vy: 0,
+    ax: 0, ay: 0,
+    sizeMul: sizeMulVal,
+    rMul: t.rMul || 1,
+    water: !!t.water,
+    rgb: t.rgb.slice(),
+    trail: [x, y],
+
+    host: null,
+    orbitRadius: 0,
+    orbitPhase: 0,
+    orbitAngularSpeed: 0,
+
+    life: 0,
+    lifeStage: 'barren',
+    gestationTimer: 0,
+    flash: 0,
+    flashColor: null,
+    impactCooldown: 0,
+  };
+}
+
+/* ===================== 物理积分 ===================== */
+function removeDrift() {
+  if (!bodies.length) return;
+  let M = 0, px = 0, py = 0;
+  for (const b of bodies) {
+    if (b.kind === 'satellite') continue;
+    M += b.m; px += b.m * b.vx; py += b.m * b.vy;
+  }
+  if (M <= 0) return;
+  px /= M; py /= M;
+  for (const b of bodies) {
+    if (b.kind === 'satellite') continue;
+    b.vx -= px; b.vy -= py;
+  }
+}
+
+function computeAccel() {
+  const n = bodies.length;
+  for (let i = 0; i < n; i++) { bodies[i].ax = 0; bodies[i].ay = 0; }
+  for (let i = 0; i < n; i++) {
+    const bi = bodies[i];
+    if (bi.kind === 'satellite') continue;
+    for (let j = i + 1; j < n; j++) {
+      const bj = bodies[j];
+      if (bj.kind === 'satellite') continue;
+      const dx = bj.x - bi.x;
+      const dy = bj.y - bi.y;
+      const d2 = dx * dx + dy * dy + SOFTENING * SOFTENING;
+      const inv = 1 / (d2 * Math.sqrt(d2));
+      const f = G * inv;
+      bi.ax += f * bj.m * dx;  bi.ay += f * bj.m * dy;
+      bj.ax -= f * bi.m * dx;  bj.ay -= f * bi.m * dy;
+    }
+  }
+}
+
+function vvStep(maxH) {
+  let minD = Infinity;
+  for (let i = 0; i < bodies.length; i++) {
+    if (bodies[i].kind === 'satellite') continue;
+    for (let j = i + 1; j < bodies.length; j++) {
+      if (bodies[j].kind === 'satellite') continue;
+      const d = Math.hypot(bodies[j].x - bodies[i].x, bodies[j].y - bodies[i].y);
+      if (d < minD) minD = d;
+    }
+  }
+  const h = Math.min(maxH, minD * 0.01);
+
+  for (const b of bodies) {
+    if (b.kind === 'satellite') continue;
+    b.x += b.vx * h + 0.5 * b.ax * h * h;
+    b.y += b.vy * h + 0.5 * b.ay * h * h;
+    b.vx += 0.5 * b.ax * h;
+    b.vy += 0.5 * b.ay * h;
+  }
+  computeAccel();
+  for (const b of bodies) {
+    if (b.kind === 'satellite') continue;
+    b.vx += 0.5 * b.ax * h;
+    b.vy += 0.5 * b.ay * h;
+  }
+
+  for (const b of bodies) {
+    if (b.kind !== 'satellite' || !b.host) continue;
+    b.orbitPhase += b.orbitAngularSpeed * h;
+    b.x = b.host.x + Math.cos(b.orbitPhase) * b.orbitRadius;
+    b.y = b.host.y + Math.sin(b.orbitPhase) * b.orbitRadius;
+    const tang = b.orbitRadius * b.orbitAngularSpeed;
+    b.vx = b.host.vx - Math.sin(b.orbitPhase) * tang;
+    b.vy = b.host.vy + Math.cos(b.orbitPhase) * tang;
+  }
+
+  return h;
+}
+
+function totalEnergy() {
+  let K = 0, U = 0;
+  for (let i = 0; i < bodies.length; i++) {
+    const bi = bodies[i];
+    if (bi.kind === 'satellite') continue;
+    K += 0.5 * bi.m * (bi.vx * bi.vx + bi.vy * bi.vy);
+    for (let j = i + 1; j < bodies.length; j++) {
+      const bj = bodies[j];
+      if (bj.kind === 'satellite') continue;
+      const r = Math.hypot(bj.x - bi.x, bj.y - bi.y);
+      U -= G * bi.m * bj.m / Math.max(r, SOFTENING);
+    }
+  }
+  return K + U;
+}
+
+function sampleTrails() {
+  const maxLen = MAX_TRAIL * 2;
+  for (const b of bodies) {
+    b.trail.push(b.x, b.y);
+    if (b.trail.length > maxLen) b.trail.splice(0, b.trail.length - maxLen);
+  }
+}
+
+/* ===================== 生命系统 ===================== */
+function killLife(b, color) {
+  b.flash = 1.0;
+  b.flashColor = color || [255, 120, 90];
+  b.life = 0;
+  b.lifeStage = 'barren';
+  b.gestationTimer = 0;
+}
+
+/* ===================== 碰撞处理 ===================== */
+/* 通用碰撞半径（世界单位） */
+function collisionRadius(b) {
+  if (b.kind === 'star')      return 0.10 * b.rMul * b.sizeMul;
+  if (b.kind === 'planet')    return 0.06 * b.sizeMul;
+  if (b.kind === 'asteroid')  return 0.03 * b.sizeMul;
+  if (b.kind === 'satellite') return 0.03 * b.sizeMul;
+  return 0.05;
+}
+
+/* 处理所有天体碰撞：
+   · 小行星撞行星 → 卫星拦截 / 生命伤害
+   · 其他碰撞 → 小的被销毁，质量加到大的
+   卫星不参与碰撞（始终绑定宿主）
+*/
+function resolveCollisions(simDt) {
+  const toRemove = new Set();
+  const events = [];
+
+  for (let i = 0; i < bodies.length; i++) {
+    const bi = bodies[i];
+    if (toRemove.has(bi)) continue;
+    if (bi.kind === 'satellite') continue;
+
+    for (let j = i + 1; j < bodies.length; j++) {
+      const bj = bodies[j];
+      if (toRemove.has(bj)) continue;
+      if (bj.kind === 'satellite') continue;
+
+      const d = Math.hypot(bj.x - bi.x, bj.y - bi.y);
+
+      const biAst = bi.kind === 'asteroid';
+      const bjAst = bj.kind === 'asteroid';
+      const biPla = bi.kind === 'planet';
+      const bjPla = bj.kind === 'planet';
+
+      let isCollision = false;
+      let isAsteroidImpact = false;
+
+      if ((biAst && bjPla) || (bjAst && biPla)) {
+        /* 小行星撞行星：用宽松的判定半径 */
+        const planet = biPla ? bi : bj;
+        const r = IMPACT_BASE_R + IMPACT_R_PER_SIZE * planet.sizeMul;
+        if (d < r) {
+          isCollision = true;
+          isAsteroidImpact = true;
+        }
+      } else {
+        /* 通用碰撞 */
+        const rA = collisionRadius(bi);
+        const rB = collisionRadius(bj);
+        if (d < rA + rB) {
+          isCollision = true;
+        }
+      }
+
+      if (!isCollision) continue;
+
+      let big, small;
+      if (bi.m >= bj.m) { big = bi; small = bj; }
+      else { big = bj; small = bi; }
+
+      if (isAsteroidImpact) {
+        const planet = biPla ? bi : bj;
+        const asteroid = biAst ? bi : bj;
+
+        /* 统计行星的卫星 */
+        let satCount = 0;
+        for (const s of bodies) {
+          if (s.kind === 'satellite' && s.host === planet && !toRemove.has(s)) satCount++;
+        }
+
+        let intercepted = false;
+        if (satCount > 0) {
+          const chance = Math.min(SAT_INTERCEPT_MAX, SAT_INTERCEPT_PER * satCount);
+          if (Math.random() < chance) intercepted = true;
+        }
+
+        if (intercepted) {
+          /* 卫星拦截 —— 行星不受伤害 */
+          events.push({ x: planet.x, y: planet.y, t: 0, type: 'shield' });
+          toRemove.add(asteroid);
+        } else {
+          /* 伤害行星 */
+          if (planet.lifeStage === 'gestating') {
+            planet.gestationTimer = 10 + Math.random() * 20;
+            planet.flash = 0.9;
+            planet.flashColor = [255, 180, 80];
+          } else if (planet.lifeStage === 'alive' || planet.life > 0) {
+            killLife(planet, [255, 130, 60]);
+          } else {
+            planet.flash = 0.6;
+            planet.flashColor = [255, 160, 70];
+          }
+          events.push({ x: planet.x, y: planet.y, t: 0, type: 'impact' });
+          planet.m += asteroid.m;
+          toRemove.add(asteroid);
+        }
+      } else {
+        /* 通用碰撞：小的被销毁，质量加到大的 */
+        /* 若 small 有卫星，转移到 big */
+        for (const s of bodies) {
+          if (s.kind === 'satellite' && s.host === small && !toRemove.has(s)) {
+            s.host = big;
+            const dx = s.x - big.x;
+            const dy = s.y - big.y;
+            s.orbitRadius = Math.max(0.15, Math.hypot(dx, dy));
+            s.orbitPhase = Math.atan2(dy, dx);
+            const vPhys = Math.sqrt(G * Math.max(big.m, 1e-9) / s.orbitRadius);
+            s.orbitAngularSpeed = (vPhys / s.orbitRadius) * SATELLITE_SPEED_MUL;
+          }
+        }
+
+        /* 若 small 是行星且带生命 —— 被吞噬 */
+        if (small.kind === 'planet' && (small.lifeStage === 'alive' || small.life > 0)) {
+          killLife(small, [255, 100, 60]);
+        }
+
+        events.push({ x: big.x, y: big.y, t: 0, type: 'impact' });
+
+        /* 质量合并 */
+        big.m += small.m;
+        /* 视觉大小稍微增加 */
+        big.sizeMul = Math.min(3.5, big.sizeMul * Math.pow(1 + small.m / big.m, 0.10));
+
+        toRemove.add(small);
+      }
+    }
+  }
+
+  if (toRemove.size > 0) {
+    if (selectedBody && toRemove.has(selectedBody)) {
+      selectedBody = null;
+    }
+    bodies = bodies.filter(b => !toRemove.has(b));
+    computeAccel();
+    E0 = totalEnergy();
+  }
+
+  for (const ev of events) impactEvents.push(ev);
+}
+
+/* ===================== 生命演化 ===================== */
+function updateLife(simDt) {
+  if (simDt <= 0) return;
+
+  resolveCollisions(simDt);
+
+  for (const b of bodies) {
+    if (b.kind !== 'planet') continue;
+
+    if (b.flash > 0) b.flash = Math.max(0, b.flash - simDt * 1.6);
+
+    const info = getHabitabilityInfo(b);
+
+    if (info.tooHot) {
+      if (b.lifeStage === 'alive' || b.life > 0 || b.lifeStage === 'gestating') {
+        killLife(b, [255, 90, 60]);
+      }
+      continue;
+    }
+
+    if (info.inHZ && b.water) {
+      if (b.lifeStage === 'barren') {
+        b.lifeStage = 'gestating';
+        b.gestationTimer = 10 + Math.random() * 20;
+      } else if (b.lifeStage === 'gestating') {
+        b.gestationTimer -= simDt;
+        if (b.gestationTimer <= 0) {
+          b.lifeStage = 'alive';
+          b.life = 0.08;
+          b.flash = 0.6;
+          b.flashColor = [140, 255, 180];
+        }
+      } else if (b.lifeStage === 'alive') {
+        b.life = Math.min(1, b.life + 0.06 * simDt);
+      }
+    } else {
+      if (b.lifeStage === 'gestating') {
+        b.lifeStage = 'barren';
+        b.gestationTimer = 0;
+      } else if (b.lifeStage === 'alive') {
+        const decay = info.tooCold ? 0.03 : 0.05;
+        b.life = Math.max(0, b.life - decay * simDt);
+        if (b.life <= 0.02) {
+          killLife(b, [120, 180, 255]);
+        }
+      }
+    }
+  }
+
+  for (const ev of impactEvents) ev.t += simDt;
+  impactEvents = impactEvents.filter(ev => ev.t < 1.2);
+}
+
+/* ===================== 放置天体 ===================== */
+function placeBody(kind, typeKey, sizeMulVal, x, y, motion, host) {
+  const b = createBody(kind, typeKey, sizeMulVal, x, y);
+
+  if (kind === 'satellite') {
+    if (!host) return null;
+    b.host = host;
+
+    const dx = x - host.x;
+    const dy = y - host.y;
+    let r = Math.hypot(dx, dy);
+    const minR = 0.12 + 0.10 * host.sizeMul;
+    const maxR = 1.6;
+    if (r < minR) r = minR;
+    if (r > maxR) r = maxR;
+
+    b.orbitRadius = r;
+    b.orbitPhase = Math.atan2(dy, dx);
+
+    const vPhys = Math.sqrt(G * Math.max(host.m, 1e-9) / r);
+    b.orbitAngularSpeed = (vPhys / r) * SATELLITE_SPEED_MUL;
+
+    b.x = host.x + Math.cos(b.orbitPhase) * r;
+    b.y = host.y + Math.sin(b.orbitPhase) * r;
+    b.vx = host.vx - Math.sin(b.orbitPhase) * r * b.orbitAngularSpeed;
+    b.vy = host.vy + Math.cos(b.orbitPhase) * r * b.orbitAngularSpeed;
+
+  } else if (motion === 'orbit') {
+    const { x: cx, y: cy, M } = getCentroid();
+    if (M > 0) {
+      const dx = x - cx, dy = y - cy;
+      const r = Math.hypot(dx, dy);
+      if (r > 1e-3) {
+        const v = Math.sqrt(G * M / r);
+        b.vx = -dy / r * v;
+        b.vy =  dx / r * v;
+      }
+    }
+  }
+
+  bodies.push(b);
+  removeDrift();
+  computeAccel();
+  sampleTrails();
+  E0 = totalEnergy();
+  return b;
+}
+
+/* ===================== 查找 / 删除 ===================== */
+function findBodyAtScreen(px, py) {
+  let best = null, bestD = 34;
+  const ox = W * 0.5, oy = H * 0.5;
+  for (const b of bodies) {
+    const sx = ox + (b.x - camX) * camScale;
+    const sy = oy - (b.y - camY) * camScale;
+    const d = Math.hypot(sx - px, sy - py);
+    if (d < bestD) { bestD = d; best = b; }
+  }
+  return best;
+}
+
+function findHostForSatellite(px, py) {
+  let best = null, bestD = 60;
+  const ox = W * 0.5, oy = H * 0.5;
+  for (const b of bodies) {
+    if (b.kind !== 'star' && b.kind !== 'planet') continue;
+    const sx = ox + (b.x - camX) * camScale;
+    const sy = oy - (b.y - camY) * camScale;
+    const d = Math.hypot(sx - px, sy - py);
+    if (d < bestD) { bestD = d; best = b; }
+  }
+  return best;
+}
+
+function deleteBody(b) {
+  if (selectedBody === b) selectedBody = null;
+
+  for (let k = bodies.length - 1; k >= 0; k--) {
+    const s = bodies[k];
+    if (s !== b && s.kind === 'satellite' && s.host === b) {
+      if (selectedBody === s) selectedBody = null;
+      bodies.splice(k, 1);
+    }
+  }
+  const i = bodies.indexOf(b);
+  if (i >= 0) bodies.splice(i, 1);
+  computeAccel();
+  E0 = totalEnergy();
+  hoverBody = null;
+}
+
+/* ===================== 相机 ===================== */
+function autoBaseScale() {
+  if (!bodies.length) return 220;
+  const { x: cx, y: cy } = getCentroid();
+  let maxD = 0.6;
+  for (const b of bodies) {
+    if (b.kind === 'satellite') continue;
+    const d = Math.hypot(b.x - cx, b.y - cy);
+    if (d > maxD) maxD = d;
+  }
+  return Math.max(Math.min(W, H) * 0.36 / maxD, 0.5);
+}
+
+function updateCamera(dt) {
+  if (isGesturing) return;
+
+  /* 跟随模式：优先跟随选中天体 */
+  if (selectedBody && bodies.indexOf(selectedBody) >= 0) {
+    const k = Math.min(1, dt * 16);
+    camTarget.x = selectedBody.x + userPanX;
+    camTarget.y = selectedBody.y + userPanY;
+
+    const base = autoBaseScale();
+    camTarget.s = base * userZoom;
+
+    camX += (camTarget.x - camX) * k;
+    camY += (camTarget.y - camY) * k;
+    camScale += (camTarget.s - camScale) * k;
+    return;
+  }
+
+  const k = 1 - Math.pow(0.0015, Math.min(dt, 0.05));
+
+  if (!bodies.length) {
+    camTarget.x = userPanX;
+    camTarget.y = userPanY;
+    camTarget.s = 220 * userZoom;
+    camX += (camTarget.x - camX) * k * 0.5;
+    camY += (camTarget.y - camY) * k * 0.5;
+    camScale += (camTarget.s - camScale) * k * 0.5;
+    return;
+  }
+
+  const { x: cx, y: cy } = getCentroid();
+  camTarget.x = cx + userPanX;
+  camTarget.y = cy + userPanY;
+  camTarget.s = autoBaseScale() * userZoom;
+
+  camX += (camTarget.x - camX) * k;
+  camY += (camTarget.y - camY) * k;
+  camScale += (camTarget.s - camScale) * k;
+}
+
+function resetView() {
+  userZoom = 1;
+  userPanX = 0;
+  userPanY = 0;
+}
+
+/* ===================== 渲染尺寸 ===================== */
+function coreRadius(b) {
+  if (b.kind === 'star')      return 5.5 * b.rMul * b.sizeMul;
+  if (b.kind === 'planet')    return 1.6 + 1.8 * b.sizeMul;
+  if (b.kind === 'asteroid')  return 0.7 + 0.9 * b.sizeMul;
+  return 1.0 + 1.0 * b.sizeMul;
+}
+
+/* ===================== 渲染 ===================== */
+function render() {
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 1;
+
+  ctx.fillStyle = '#04050a';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = '#9db2cc';
+  for (const s of stars) {
+    ctx.globalAlpha = s.a;
+    ctx.fillRect(s.x, s.y, s.r, s.r);
+  }
+  ctx.globalAlpha = 1;
+
+  const ox = W * 0.5, oy = H * 0.5;
+  const SX = x => ox + (x - camX) * camScale;
+  const SY = y => oy - (y - camY) * camScale;
+
+  if (mode === 'delete' && mouseX >= 0) {
+    hoverBody = findBodyAtScreen(mouseX, mouseY);
+  } else {
+    hoverBody = null;
+  }
+
+  /* 卫星模式：高亮可宿主天体 */
+  if (mode === 'satellite') {
+    const pulse = 0.55 + 0.35 * Math.sin(simTime * 3.0 + performance.now() * 0.002);
+    for (const b of bodies) {
+      if (b.kind !== 'star' && b.kind !== 'planet') continue;
+      const x = SX(b.x), y = SY(b.y);
+      const baseR = coreRadius(b) * 3.5 + 8;
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = pulse;
+      ctx.setLineDash([4, 6]);
+      ctx.strokeStyle = 'rgba(255, 215, 110, 0.95)';
+      ctx.lineWidth = 1.4;
+      ctx.beginPath(); ctx.arc(x, y, baseR, 0, TWO_PI); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  /* 宜居带 */
+  if (showHabitableZone) {
+    for (const b of bodies) {
+      if (b.kind !== 'star') continue;
+
+      const x = SX(b.x), y = SY(b.y);
+      const hz = habitableZone(b);
+      const rInPx  = hz.rIn  * camScale;
+      const rOutPx = hz.rOut * camScale;
+      if (rOutPx < 4) continue;
+
+      ctx.globalCompositeOperation = 'lighter';
+
+      ctx.beginPath();
+      ctx.arc(x, y, rOutPx, 0, TWO_PI);
+      if (rInPx > 0.5) ctx.arc(x, y, rInPx, 0, TWO_PI, true);
+      ctx.fillStyle = 'rgba(70, 235, 130, 0.075)';
+      ctx.fill('evenodd');
+
+      ctx.strokeStyle = 'rgba(90, 245, 150, 0.32)';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(x, y, rInPx, 0, TWO_PI); ctx.stroke();
+      ctx.strokeStyle = 'rgba(90, 245, 150, 0.22)';
+      ctx.beginPath(); ctx.arc(x, y, rOutPx, 0, TWO_PI); ctx.stroke();
+
+      if (rOutPx > 10) {
+        const grd = ctx.createRadialGradient(x, y, rInPx, x, y, rOutPx);
+        grd.addColorStop(0.00, 'rgba(80,240,140,0)');
+        grd.addColorStop(0.50, 'rgba(80,240,140,0.10)');
+        grd.addColorStop(1.00, 'rgba(80,240,140,0)');
+        ctx.fillStyle = grd;
+        ctx.beginPath(); ctx.arc(x, y, rOutPx, 0, TWO_PI); ctx.fill();
+      }
+
+      if (rOutPx > 55) {
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = 0.55;
+        ctx.fillStyle = '#6ee7a0';
+        ctx.font = '11px ui-monospace, Menlo, Consolas, monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('宜居带', x, y - rOutPx - 6);
+        ctx.globalAlpha = 1;
+      }
+    }
+  }
+
+  ctx.globalCompositeOperation = 'lighter';
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+
+  /* 轨迹 */
+  for (const b of bodies) {
+    const t = b.trail;
+    const n = t.length / 2;
+    if (n < 2) continue;
+
+    const [r, g, bl] = b.rgb;
+    const isStar = b.kind === 'star';
+    const isSat  = b.kind === 'satellite';
+    ctx.strokeStyle = `rgb(${r},${g},${bl})`;
+    ctx.lineWidth = isStar ? 1.5 : (isSat ? 0.9 : 1.1);
+
+    for (let s = 0; s < n - 1; s += CHUNK) {
+      const e = Math.min(s + CHUNK, n - 1);
+      const a = (isStar ? 0.50 : (isSat ? 0.35 : 0.42)) * Math.pow(s / (n - 1), 1.7);
+      if (a < 0.008) continue;
+      ctx.globalAlpha = a;
+      ctx.beginPath();
+      ctx.moveTo(SX(t[s * 2]), SY(t[s * 2 + 1]));
+      for (let k = s + 1; k <= e; k++) {
+        ctx.lineTo(SX(t[k * 2]), SY(t[k * 2 + 1]));
+      }
+      ctx.stroke();
+    }
+  }
+
+  /* 天体 */
+  for (const b of bodies) {
+    const x = SX(b.x), y = SY(b.y);
+    if (x < -320 || x > W + 320 || y < -320 || y > H + 320) continue;
+
+    const [r, g, bl] = b.rgb;
+    const core = coreRadius(b);
+    const isStar = b.kind === 'star';
+    const R = core * (isStar ? 6.5 : 5);
+
+    /* 孕育中光晕 */
+    if (b.kind === 'planet' && b.lifeStage === 'gestating') {
+      const prog = 1 - Math.max(0, b.gestationTimer) / 30;
+      const pulse = 0.55 + 0.45 * Math.sin(simTime * 3.0);
+      const gr = core * (2.0 + prog * 1.5) * 4;
+      const grd = ctx.createRadialGradient(x, y, 0, x, y, gr);
+      grd.addColorStop(0.00, `rgba(120,235,190,${0.10 + 0.10 * pulse * prog})`);
+      grd.addColorStop(0.55, `rgba( 90,220,160,${0.04 * prog})`);
+      grd.addColorStop(1.00, 'rgba( 60,200,130,0)');
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = grd;
+      ctx.beginPath(); ctx.arc(x, y, gr, 0, TWO_PI); ctx.fill();
+    }
+
+    /* 生命光晕 */
+    if (b.kind === 'planet' && b.life > 0.02) {
+      const lifeR = core * (2.2 + b.life * 3.4) * 4;
+      const pulse = 1 + 0.06 * Math.sin(simTime * 2.4);
+      const grd = ctx.createRadialGradient(x, y, 0, x, y, lifeR * pulse);
+      const baseA = b.life * 0.55;
+      grd.addColorStop(0.00, `rgba(140,255,180,${baseA})`);
+      grd.addColorStop(0.22, `rgba( 90,235,140,${baseA * 0.55})`);
+      grd.addColorStop(0.55, `rgba( 60,200,110,${baseA * 0.18})`);
+      grd.addColorStop(1.00, 'rgba( 40,170, 90,0)');
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = grd;
+      ctx.beginPath(); ctx.arc(x, y, lifeR * pulse, 0, TWO_PI); ctx.fill();
+    }
+
+    /* 闪光 */
+    if (b.kind === 'planet' && b.flash > 0 && b.flashColor) {
+      const [fr, fg, fb] = b.flashColor;
+      const flashR = core * (3.0 + (1 - b.flash) * 6.0) * 4;
+      const grd = ctx.createRadialGradient(x, y, 0, x, y, flashR);
+      grd.addColorStop(0.00, `rgba(${fr},${fg},${fb},${b.flash * 0.75})`);
+      grd.addColorStop(0.45, `rgba(${fr},${fg},${fb},${b.flash * 0.28})`);
+      grd.addColorStop(1.00, `rgba(${fr},${fg},${fb},0)`);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = grd;
+      ctx.beginPath(); ctx.arc(x, y, flashR, 0, TWO_PI); ctx.fill();
+    }
+
+    /* 主光晕 */
+    const grd = ctx.createRadialGradient(x, y, 0, x, y, R);
+    if (isStar) {
+      grd.addColorStop(0.00, 'rgba(255,255,255,0.98)');
+      grd.addColorStop(0.10, `rgba(${r},${g},${bl},0.95)`);
+      grd.addColorStop(0.32, `rgba(${r},${g},${bl},0.30)`);
+      grd.addColorStop(0.65, `rgba(${r},${g},${bl},0.08)`);
+      grd.addColorStop(1.00, `rgba(${r},${g},${bl},0)`);
+    } else {
+      grd.addColorStop(0.00, 'rgba(255,255,255,0.95)');
+      grd.addColorStop(0.16, `rgba(${r},${g},${bl},0.92)`);
+      grd.addColorStop(0.42, `rgba(${r},${g},${bl},0.26)`);
+      grd.addColorStop(1.00, `rgba(${r},${g},${bl},0)`);
+    }
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = grd;
+    ctx.beginPath(); ctx.arc(x, y, R, 0, TWO_PI); ctx.fill();
+
+    if (b.water && !isStar) {
+      ctx.globalAlpha = 0.5;
+      ctx.strokeStyle = 'rgba(130,205,255,0.6)';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(x, y, core * 1.6, 0, TWO_PI); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
+    if (b.kind === 'planet' && b.life > 0.35) {
+      const lifeAlpha = Math.min(0.85, (b.life - 0.35) * 1.5);
+      ctx.globalAlpha = lifeAlpha;
+      ctx.strokeStyle = 'rgba(120,255,170,0.85)';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.arc(x, y, core * 2.4, 0, TWO_PI); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+
+    if (b.kind === 'planet' && b.lifeStage === 'gestating') {
+      ctx.globalAlpha = 0.7;
+      ctx.strokeStyle = 'rgba(140,235,180,0.7)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 4]);
+      ctx.beginPath(); ctx.arc(x, y, core * 2.0, 0, TWO_PI); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+    }
+
+    /* 跟随选中高亮 */
+    if (b === selectedBody) {
+      const t = performance.now() * 0.003;
+      const rr = core * 3.2 + 8 + Math.sin(t) * 3;
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = 0.95;
+      ctx.strokeStyle = 'rgba(100, 220, 255, 0.95)';
+      ctx.lineWidth = 1.8;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath(); ctx.arc(x, y, rr, 0, TWO_PI); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 0.35;
+      ctx.strokeStyle = 'rgba(150, 235, 255, 0.6)';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(x, y, rr + 5, 0, TWO_PI); ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'lighter';
+    }
+  }
+
+  /* 撞击视觉事件 */
+  ctx.globalCompositeOperation = 'lighter';
+  for (const ev of impactEvents) {
+    const x = SX(ev.x), y = SY(ev.y);
+    const prog = ev.t / 1.2;
+    const alpha = Math.max(0, 1 - prog);
+    const ringR = 20 + prog * 90;
+
+    if (ev.type === 'shield') {
+      ctx.globalAlpha = alpha * 0.95;
+      ctx.strokeStyle = 'rgba(120, 220, 255, 0.95)';
+      ctx.lineWidth = 3 * (1 - prog * 0.6);
+      ctx.beginPath(); ctx.arc(x, y, ringR * 0.85, 0, TWO_PI); ctx.stroke();
+
+      ctx.globalAlpha = alpha * 0.7;
+      ctx.strokeStyle = 'rgba(200, 240, 255, 0.9)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(x, y, ringR * 0.5, 0, TWO_PI); ctx.stroke();
+
+      const coreGrd = ctx.createRadialGradient(x, y, 0, x, y, ringR * 0.6);
+      coreGrd.addColorStop(0.00, `rgba(200, 240, 255, ${alpha * 0.7})`);
+      coreGrd.addColorStop(0.55, `rgba(120, 200, 255, ${alpha * 0.35})`);
+      coreGrd.addColorStop(1.00, 'rgba( 60, 140, 220, 0)');
+      ctx.fillStyle = coreGrd;
+      ctx.beginPath(); ctx.arc(x, y, ringR * 0.6, 0, TWO_PI); ctx.fill();
+
+    } else {
+      ctx.globalAlpha = alpha * 0.85;
+      ctx.strokeStyle = 'rgba(255, 150, 60, 0.95)';
+      ctx.lineWidth = 3 * (1 - prog * 0.6);
+      ctx.beginPath(); ctx.arc(x, y, ringR, 0, TWO_PI); ctx.stroke();
+
+      const coreGrd = ctx.createRadialGradient(x, y, 0, x, y, ringR * 0.7);
+      coreGrd.addColorStop(0.00, `rgba(255, 240, 200, ${alpha})`);
+      coreGrd.addColorStop(0.45, `rgba(255, 170, 80, ${alpha * 0.6})`);
+      coreGrd.addColorStop(1.00, 'rgba(255, 120, 40, 0)');
+      ctx.fillStyle = coreGrd;
+      ctx.beginPath(); ctx.arc(x, y, ringR * 0.7, 0, TWO_PI); ctx.fill();
+    }
+  }
+  ctx.globalAlpha = 1;
+
+  /* 放置预览圈 */
+  if (mode !== 'delete' && mode !== 'satellite' && mode !== 'follow' &&
+      mouseX >= 0 && !isGesturing) {
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.setLineDash([4, 5]);
+    ctx.strokeStyle = 'rgba(120,170,240,0.45)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(mouseX, mouseY, 14, 0, TWO_PI); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  /* 删除模式高亮 */
+  if (mode === 'delete' && hoverBody) {
+    const x = SX(hoverBody.x), y = SY(hoverBody.y);
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = 'rgba(255,90,90,0.95)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.arc(x, y, 22, 0, TWO_PI); ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.strokeStyle = 'rgba(255,120,120,0.9)';
+    ctx.beginPath();
+    ctx.moveTo(x - 6, y - 6); ctx.lineTo(x + 6, y + 6);
+    ctx.moveTo(x + 6, y - 6); ctx.lineTo(x - 6, y + 6);
+    ctx.stroke();
+  }
+
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = 1;
+}
+
+/* ===================== HUD ===================== */
+const hud = document.getElementById('hud');
+
+function updateHUD() {
+  let ns = 0, np = 0, na = 0, nm = 0;
+  let aliveCount = 0, gestatingCount = 0, habitableCount = 0;
+
+  for (const b of bodies) {
+    if (b.kind === 'star') ns++;
+    else if (b.kind === 'planet') {
+      np++;
+      if (b.lifeStage === 'alive') aliveCount++;
+      else if (b.lifeStage === 'gestating') gestatingCount++;
+      if (isInHabitableZoneSimple(b)) habitableCount++;
+    }
+    else if (b.kind === 'asteroid') na++;
+    else nm++;
+  }
+
+  let energyStr = '—';
+  if (bodies.length) {
+    const E = totalEnergy();
+    const abs = Math.abs(E - E0);
+    const rel = abs / (Math.abs(E0) + 0.5) * 100;
+    energyStr = `${abs.toFixed(3)} (${rel.toFixed(1)}%)`;
+  }
+
+  let lifeStr = '';
+  if (np > 0) {
+    lifeStr = ` <span class="k">|</span> <span class="life">生命 ${aliveCount}`;
+    if (gestatingCount > 0) lifeStr += ` <span class="warn">(孕育 ${gestatingCount})</span>`;
+    lifeStr += `</span>`;
+    if (habitableCount > 0) {
+      lifeStr += ` <span class="k">(宜居 ${habitableCount})</span>`;
+    }
+  }
+
+  let followStr = '';
+  if (selectedBody && bodies.indexOf(selectedBody) >= 0) {
+    followStr = ` <span class="k">|</span> <span class="follow">跟随：${selectedBody.name}</span>`;
+  }
+
+  hud.innerHTML =
+    `<span class="t">宇宙模拟器</span> · ` +
+    `恒星 ${ns} · 行星 ${np} · 小行星 ${na} · 卫星 ${nm}<br>` +
+    `<span class="k">t =</span> ${simTime.toFixed(2)} ` +
+    `<span class="k">| 速度</span> ${speed.toFixed(1)}× ` +
+    `<span class="k">| 缩放</span> ${userZoom.toFixed(2)}× ` +
+    `<span class="k">| ΔE</span> ${energyStr}` +
+    lifeStr +
+    followStr +
+    (paused ? ' <span class="k">| 已暂停</span>' : '') +
+    (mode === 'delete' ? ' <span class="k">| 删除模式</span>' : '') +
+    (mode === 'satellite' ? ' <span class="k">| 点天体加卫星</span>' : '') +
+    (mode === 'follow' ? ' <span class="k">| 点天体跟随</span>' : '') +
+    (showHabitableZone ? ' <span class="k">| 宜居带 ON</span>' : '');
+}
+
+/* ===================== UI 绑定 ===================== */
+const typeRow = document.getElementById('typeRow');
+const modeBtns = {
+  star:      document.getElementById('modeStar'),
+  planet:    document.getElementById('modePlanet'),
+  asteroid:  document.getElementById('modeAsteroid'),
+  satellite: document.getElementById('modeSatellite'),
+  follow:    document.getElementById('modeFollow'),
+  delete:    document.getElementById('modeDelete'),
+};
+
+function buildTypeButtons() {
+  typeRow.innerHTML = '';
+  if (mode === 'delete') {
+    const span = document.createElement('span');
+    span.className = 'lbl';
+    span.textContent = '点击天体即可删除';
+    typeRow.appendChild(span);
+    return;
+  }
+  if (mode === 'satellite') {
+    const span = document.createElement('span');
+    span.className = 'lbl';
+    span.textContent = '选择类型后，点击恒星或行星绑定';
+    typeRow.appendChild(span);
+  }
+  if (mode === 'follow') {
+    const span = document.createElement('span');
+    span.className = 'lbl';
+    span.textContent = '点击天体跟随视角，点空白取消';
+    typeRow.appendChild(span);
+    return;
+  }
+
+  const table = CATEGORIES[mode].types;
+  const current = catType[mode];
+
+  for (const [key, t] of Object.entries(table)) {
+    const btn = document.createElement('button');
+    btn.className = 'dot';
+    btn.style.setProperty('--c', `rgb(${t.rgb.join(',')})`);
+
+    const isWatery = !!t.water;
+    btn.textContent = (mode === 'star')
+      ? t.name
+      : `${t.name}·${isWatery ? '含水' : '无水'}`;
+
+    if (key === current) btn.classList.add('active');
+
+    (function(k){
+      btn.addEventListener('click', function(ev){
+        ev.stopPropagation();
+        catType[mode] = k;
+        buildTypeButtons();
+      });
+    })(key);
+
+    typeRow.appendChild(btn);
+  }
+}
+
+function setMode(m) {
+  mode = m;
+  for (const k in modeBtns) {
+    if (modeBtns[k]) modeBtns[k].classList.toggle('active', k === m);
+  }
+  buildTypeButtons();
+}
+
+function bindButton(id, handler) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.addEventListener('click', function(ev){
+    ev.stopPropagation();
+    ev.preventDefault();
+    handler(ev);
+  });
+  el.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); });
+  el.addEventListener('touchstart',  function(ev){ ev.stopPropagation(); }, {passive:true});
+}
+
+bindButton('modeStar',      () => setMode('star'));
+bindButton('modePlanet',    () => setMode('planet'));
+bindButton('modeAsteroid',  () => setMode('asteroid'));
+bindButton('modeSatellite', () => setMode('satellite'));
+bindButton('modeFollow',    () => setMode('follow'));
+bindButton('modeDelete',    () => setMode('delete'));
+
+bindButton('motOrbit', () => {
+  placeMotion = 'orbit';
+  document.getElementById('motOrbit').classList.add('active');
+  document.getElementById('motStatic').classList.remove('active');
+});
+bindButton('motStatic', () => {
+  placeMotion = 'static';
+  document.getElementById('motStatic').classList.add('active');
+  document.getElementById('motOrbit').classList.remove('active');
+});
+
+document.getElementById('size').addEventListener('input', e => {
+  sizeMul = parseFloat(e.target.value);
+  document.getElementById('sizeVal').textContent = sizeMul.toFixed(1) + '×';
+});
+document.getElementById('speed').addEventListener('input', e => {
+  speed = parseFloat(e.target.value);
+  document.getElementById('speedVal').textContent = speed.toFixed(1) + '×';
+});
+
+bindButton('btnHabitable', () => {
+  showHabitableZone = !showHabitableZone;
+  document.getElementById('btnHabitable').classList.toggle('active', showHabitableZone);
+});
+
+bindButton('btnPause', (e) => {
+  paused = !paused;
+  e.target.textContent = paused ? '继续' : '暂停';
+  lastT = performance.now();
+});
+
+bindButton('btnResetView', () => {
+  resetView();
+  /* 重置视角也取消跟随 */
+  selectedBody = null;
+});
+
+bindButton('btnClear', () => {
+  bodies = [];
+  impactEvents = [];
+  selectedBody = null;
+  simTime = 0; prevSimTime = 0;
+  nextSample = SAMPLE_DT; acc = 0; E0 = 0;
+  hoverBody = null;
+  resetView();
+  lastT = performance.now();
+});
+
+/* ===================== 画布手势交互 ===================== */
+const activePointers = new Map();
+let panState   = null;
+let pinchState = null;
+let isGesturing = false;
+
+function refreshGesturing() {
+  isGesturing = activePointers.size > 0;
+}
+
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+canvas.addEventListener('pointerdown', e => {
+  if (e.target !== canvas) return;
+
+  activePointers.set(e.pointerId, {
+    id: e.pointerId,
+    x: e.clientX, y: e.clientY,
+    startX: e.clientX, startY: e.clientY,
+    startTime: performance.now(),
+    moved: false
+  });
+  refreshGesturing();
+
+  if (activePointers.size === 1) {
+    const p = activePointers.get(e.pointerId);
+    panState = {
+      startCamX: camX,
+      startCamY: camY,
+      startScale: camScale,
+      startX: p.startX,
+      startY: p.startY
+    };
+    pinchState = null;
+  } else if (activePointers.size === 2) {
+    const [a, b] = [...activePointers.values()];
+    const cx = (a.x + b.x) * 0.5;
+    const cy = (a.y + b.y) * 0.5;
+    pinchState = {
+      startDist: Math.hypot(a.x - b.x, a.y - b.y) || 1,
+      startScale: camScale,
+      anchorWX: camX + (cx - W * 0.5) / camScale,
+      anchorWY: camY - (cy - H * 0.5) / camScale
+    };
+    panState = null;
+  }
+});
+
+canvas.addEventListener('pointermove', e => {
+  if (e.pointerType === 'mouse') {
+    mouseX = e.clientX;
+    mouseY = e.clientY;
+  }
+
+  const p = activePointers.get(e.pointerId);
+  if (!p) return;
+
+  p.x = e.clientX;
+  p.y = e.clientY;
+
+  const ddx = p.x - p.startX;
+  const ddy = p.y - p.startY;
+  if (!p.moved && Math.hypot(ddx, ddy) > 8) p.moved = true;
+
+  if (activePointers.size === 1 && panState) {
+    const dx = p.x - panState.startX;
+    const dy = p.y - panState.startY;
+
+    const newCamX = panState.startCamX - dx / panState.startScale;
+    const newCamY = panState.startCamY + dy / panState.startScale;
+
+    /* 用参考点（跟随模式 = 选中天体，否则 = 质心）换算 userPan */
+    const ref = getRefPoint();
+    userPanX = newCamX - ref.x;
+    userPanY = newCamY - ref.y;
+
+    camX = camTarget.x = newCamX;
+    camY = camTarget.y = newCamY;
+  }
+  else if (activePointers.size === 2 && pinchState) {
+    const [a, b] = [...activePointers.values()];
+    const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+    const factor = dist / pinchState.startDist;
+
+    const newScale = Math.max(0.5, Math.min(1e6, pinchState.startScale * factor));
+
+    const cx = (a.x + b.x) * 0.5;
+    const cy = (a.y + b.y) * 0.5;
+
+    const newCamX = pinchState.anchorWX - (cx - W * 0.5) / newScale;
+    const newCamY = pinchState.anchorWY + (cy - H * 0.5) / newScale;
+
+    const base = autoBaseScale();
+    userZoom = Math.max(0.05, Math.min(60, newScale / base));
+
+    const ref = getRefPoint();
+    userPanX = newCamX - ref.x;
+    userPanY = newCamY - ref.y;
+
+    camX = camTarget.x = newCamX;
+    camY = camTarget.y = newCamY;
+    camScale = camTarget.s = newScale;
+  }
+});
+
+function releasePointer(e) {
+  const p = activePointers.get(e.pointerId);
+  if (!p) return;
+
+  activePointers.delete(e.pointerId);
+  refreshGesturing();
+
+  if (p && !p.moved && activePointers.size === 0 &&
+      performance.now() - p.startTime < 500) {
+    handleClick(e.clientX, e.clientY);
+  }
+
+  if (activePointers.size === 0) {
+    panState = null;
+    pinchState = null;
+  } else if (activePointers.size === 1) {
+    const rem = [...activePointers.values()][0];
+    panState = {
+      startCamX: camX,
+      startCamY: camY,
+      startScale: camScale,
+      startX: rem.x,
+      startY: rem.y
+    };
+    pinchState = null;
+    rem.moved = true;
+  }
+}
+
+canvas.addEventListener('pointerup', releasePointer);
+canvas.addEventListener('pointercancel', releasePointer);
+
+function handleClick(px, py) {
+  if (mode === 'delete') {
+    const target = findBodyAtScreen(px, py);
+    if (target) deleteBody(target);
+    return;
+  }
+
+  if (mode === 'follow') {
+    const target = findBodyAtScreen(px, py);
+    if (target) {
+      if (selectedBody === target) {
+        /* 再次点击同一天体 → 取消跟随 */
+        selectedBody = null;
+      } else {
+        selectedBody = target;
+      }
+    } else {
+      /* 点击空白取消 */
+      selectedBody = null;
+    }
+    return;
+  }
+
+  const wx = camX + (px - W * 0.5) / camScale;
+  const wy = camY - (py - H * 0.5) / camScale;
+
+  if (mode === 'satellite') {
+    const host = findHostForSatellite(px, py);
+    if (!host) return;
+    placeBody('satellite', catType.satellite, sizeMul, wx, wy, 'orbit', host);
+  } else {
+    placeBody(mode, catType[mode], sizeMul, wx, wy, placeMotion);
+  }
+  lastT = performance.now();
+}
+
+canvas.addEventListener('wheel', e => {
+  e.preventDefault();
+  const factor = Math.exp(-e.deltaY * 0.0015);
+  const mx = e.clientX, my = e.clientY;
+
+  const wx = camX + (mx - W * 0.5) / camScale;
+  const wy = camY - (my - H * 0.5) / camScale;
+
+  const base = autoBaseScale();
+  userZoom = Math.max(0.05, Math.min(60, userZoom * factor));
+  const newScale = base * userZoom;
+
+  const newCamX = wx - (mx - W * 0.5) / newScale;
+  const newCamY = wy + (my - H * 0.5) / newScale;
+
+  const ref = getRefPoint();
+  userPanX = newCamX - ref.x;
+  userPanY = newCamY - ref.y;
+
+  camX = camTarget.x = newCamX;
+  camY = camTarget.y = newCamY;
+  camScale = camTarget.s = newScale;
+}, { passive: false });
+
+canvas.addEventListener('pointerleave', e => {
+  if (e.pointerType === 'mouse') {
+    mouseX = -1; mouseY = -1; hoverBody = null;
+  }
+});
+
+/* ===================== 主循环 ===================== */
+let lastT = performance.now();
+
+function frame(now) {
+  requestAnimationFrame(frame);
+
+  let dt = (now - lastT) / 1000;
+  lastT = now;
+  if (dt > 0.05) dt = 0.05;
+
+  if (!paused && bodies.length) {
+    acc += dt * speed;
+    let steps = 0;
+    while (acc >= BASE_STEP && steps < MAX_STEPS) {
+      const usedH = vvStep(BASE_STEP);
+      acc -= usedH;
+      simTime += usedH;
+      steps++;
+      if (simTime >= nextSample) {
+        sampleTrails();
+        nextSample += SAMPLE_DT;
+      }
+    }
+    if (acc > BASE_STEP * MAX_STEPS) acc = 0;
+
+    const simDt = simTime - prevSimTime;
+    prevSimTime = simTime;
+    if (simDt > 0) updateLife(simDt);
+  } else {
+    prevSimTime = simTime;
+  }
+
+  updateCamera(dt);
+  render();
+  updateHUD();
+}
+
+/* ===================== 启动 ===================== */
+resize();
+setMode('star');
+buildTypeButtons();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
