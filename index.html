@@ -349,6 +349,7 @@
     <button id="btnPause" title="空格">暂停</button>
     <button id="btnResetView" title="快捷键 R">重置视角</button>
     <button id="btnClear" class="danger">全部清空</button>
+<button id="btnExit" class="danger">⏏ 退出</button>
   </div>
 </div>
 
@@ -1931,7 +1932,29 @@ bindButton('btnClear', () => {
   resetView();
   lastT = performance.now();
 });
-
+/* ---- 退出到首页（不保存） ---- */
+function exitToHome() {
+  if (inGame) {
+    if (!confirm('确定退出到首页吗？未保存的内容会丢失。')) return;
+  }
+  bodies = [];
+  impactEvents = [];
+  selectedBody = null;
+  simTime = 0; prevSimTime = 0;
+  nextSample = SAMPLE_DT; acc = 0; E0 = 0;
+  camX = 0; camY = 0; camScale = 220;
+  camTarget.x = 0; camTarget.y = 0; camTarget.s = 220;
+  userZoom = 1; userPanX = 0; userPanY = 0;
+  smoothMaxD = 0.6;
+  inGame = false;
+  currentSaveId = null;
+  document.body.classList.remove('in-game');
+  hoverBody = null;
+  mouseX = -1; mouseY = -1;
+  openSaveModal(true);
+  lastT = performance.now();
+}
+bindButton('btnExit', exitToHome);
 /* ===================== 键盘快捷键 ===================== */
 window.addEventListener('keydown', e => {
   const tag = (e.target && e.target.tagName ? e.target.tagName : '').toUpperCase();
