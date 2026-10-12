@@ -16,7 +16,6 @@
     touch-action: none;
     cursor: crosshair;
   }
-
   .hud {
     position: fixed; left: 16px; top: 14px;
     color: #8d9aab; font: 12px/1.8 ui-monospace, Menlo, Consolas, monospace;
@@ -29,7 +28,6 @@
   .hud .warn { color: #ffb36b; }
   .hud .follow { color: #6cd2ff; }
   .hud .save { color: #8bc4ff; }
-
   .panel {
     position: fixed; left: 10px; right: 10px; bottom: 10px;
     display: flex; flex-direction: column; gap: 6px;
@@ -42,7 +40,6 @@
     -webkit-backdrop-filter: blur(6px);
   }
   .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
-
   button {
     background: #10151d;
     border: 1px solid #263040;
@@ -71,14 +68,12 @@
     margin-right: 5px; vertical-align: middle;
     background: var(--c, #888); box-shadow: 0 0 8px var(--c, #888);
   }
-
   .lbl {
     color: #6b7789; font: 11px ui-monospace, Menlo, Consolas, monospace;
     display: flex; align-items: center; gap: 5px;
   }
   input[type=range] { width: 80px; accent-color: #4d8fe8; }
   .sep { width: 1px; height: 18px; background: #263040; margin: 0 2px; }
-
   .tip {
     position: fixed; right: 12px; top: 56px; text-align: right;
     color: #4f5b6b; font: 11px/1.7 ui-monospace, Menlo, Consolas, monospace;
@@ -87,7 +82,6 @@
     text-shadow: 0 0 8px #000;
   }
   .tip b { color: #7a88a0; font-weight: 600; }
-
   .save-btn-fixed {
     position: fixed;
     right: 12px; top: 12px;
@@ -97,7 +91,6 @@
     display: none;
   }
   body.in-game .save-btn-fixed { display: block; }
-
   .modal {
     position: fixed; inset: 0;
     background: rgba(0,0,0,0.75);
@@ -108,14 +101,12 @@
     padding: 16px;
   }
   .modal.open { display: flex; }
-
   .modal.startup {
     background: #04050a;
     padding: 0;
     align-items: stretch;
     justify-content: stretch;
   }
-
   .modal-content {
     background: #0a1018;
     border: 1px solid #1f2a3b;
@@ -129,7 +120,6 @@
     color: #c3cede;
     font: 12px ui-monospace, Menlo, Consolas, monospace;
   }
-
   .modal.startup .modal-content {
     max-width: 100%;
     max-height: 100%;
@@ -139,7 +129,6 @@
     box-shadow: none;
     height: 100%;
   }
-
   .modal-head {
     display: flex; justify-content: space-between; align-items: center;
     padding: 12px 16px;
@@ -154,7 +143,6 @@
     font-size: 18px;
     letter-spacing: 1px;
   }
-
   .modal-head .subtitle {
     display: block;
     font-size: 11px;
@@ -163,14 +151,12 @@
     letter-spacing: 0;
     margin-top: 4px;
   }
-
   .modal-head button {
     padding: 4px 10px;
     font-size: 14px;
     line-height: 1;
   }
   .modal.startup .modal-head button { display: none; }
-
   .save-list {
     flex: 1;
     overflow-y: auto;
@@ -190,14 +176,12 @@
     width: 100%;
     max-width: 480px;
   }
-
   .save-empty {
     color: #4f5b6b;
     text-align: center;
     padding: 30px 10px;
     font-style: italic;
   }
-
   .save-item {
     background: #10151d;
     border: 1px solid #1a2332;
@@ -258,7 +242,6 @@
   .btn-del:hover { background: #3a1a1a; border-color: #d05555; }
   .btn-save    { background: #1a3a28; border-color: #2f6d40; color: #c8f4d8; }
   .btn-save:hover { background: #245038; border-color: #4dbf72; }
-
   .modal-actions {
     display: flex;
     gap: 8px;
@@ -279,7 +262,6 @@
   .modal.startup .modal-actions button {
     flex: 0 1 200px;
   }
-
   .toast {
     position: fixed;
     left: 50%; bottom: 120px;
@@ -349,7 +331,7 @@
     <button id="btnPause" title="空格">暂停</button>
     <button id="btnResetView" title="快捷键 R">重置视角</button>
     <button id="btnClear" class="danger">全部清空</button>
-<button id="btnExit" class="danger">⏏ 退出</button>
+    <button id="btnExit" class="danger">⏏ 退出</button>
   </div>
 </div>
 
@@ -394,9 +376,13 @@ const ctx    = canvas.getContext('2d');
 let W = 0, H = 0, DPR = 1;
 let stars = [];
 
+let __lastResizeW = 0, __lastResizeH = 0;
 function resize() {
   DPR = Math.min(window.devicePixelRatio || 1, 2);
-  W = window.innerWidth; H = window.innerHeight;
+  const newW = window.innerWidth, newH = window.innerHeight;
+  if (newW === __lastResizeW && newH === __lastResizeH && W > 0) return;
+  __lastResizeW = newW; __lastResizeH = newH;
+  W = newW; H = newH;
   canvas.width  = Math.round(W * DPR);
   canvas.height = Math.round(H * DPR);
   canvas.style.width  = W + 'px';
@@ -411,13 +397,18 @@ function resize() {
     });
   }
 }
-window.addEventListener('resize', resize);
+let __resizeTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(__resizeTimer);
+  __resizeTimer = setTimeout(resize, 150);
+});
 
 /* ===================== 物理常量 ===================== */
 const G         = 1;
-const BASE_STEP = 0.0002;
+const BASE_STEP = 0.0004;   /* ★ 步长翻倍，每帧物理步数减半 */
 const SOFTENING = 0.06;
-const MAX_STEPS = 6000;
+const MAX_STEPS = 800;      /* ★ 从 6000 降到 800，配合动态步数限制 */
+const OVERLAP_CHECK_DIST = 0.15;   /* ★ 提前合并的最近距离阈值 */
 const SAMPLE_DT = 0.02;
 const MAX_TRAIL = 1200;
 const CHUNK     = 16;
@@ -484,7 +475,6 @@ let userZoom  = 1;
 let userPanX  = 0;
 let userPanY  = 0;
 
-/* ★ 平滑的"系统尺度"，避免双星椭圆轨道近星点引起的缩放抖动 */
 let smoothMaxD = 0.6;
 
 let mode = 'star';
@@ -501,6 +491,21 @@ let impactEvents = [];
 
 let inGame = false;
 let currentSaveId = null;
+
+let lastT = performance.now();
+
+/* ★ E0 延迟建立（避免初始瞬态污染基准）
+   ★ 只在两种时机触发：
+     1) 空宇宙里放下第一个天体
+     2) 加载存档后立即锁定（不走延迟）
+   其他所有操作（继续放置、删除、合并）都不重建 E0。 */
+let __e0Initialized = false;
+let __e0Pending = false;
+let __e0DelayTimer = 0;
+function markE0Dirty() {
+  __e0Pending = true;
+  __e0DelayTimer = 0;
+}
 
 /* ===================== 工具 ===================== */
 function getCentroid() {
@@ -575,28 +580,15 @@ function createBody(kind, typeKey, sizeMulVal, x, y) {
     water: !!t.water, rgb: t.rgb.slice(), trail: [x, y],
     host: null, orbitRadius: 0, orbitPhase: 0, orbitAngularSpeed: 0,
     life: 0, lifeStage: 'barren', gestationTimer: 0,
-    flash: 0, flashColor: null, impactCooldown: 0,
+    flash: 0, flashColor: null,
   };
 }
 
 /* ===================== 物理积分 ===================== */
-function removeDrift() {
-  if (!bodies.length) return;
-  let M = 0, px = 0, py = 0;
-  for (const b of bodies) {
-    if (b.kind === 'satellite') continue;
-    M += b.m; px += b.m * b.vx; py += b.m * b.vy;
-  }
-  if (M <= 0) return;
-  px /= M; py /= M;
-  for (const b of bodies) {
-    if (b.kind === 'satellite') continue;
-    b.vx -= px; b.vy -= py;
-  }
-}
-
+let cachedMinD = Infinity;   /* ★ 缓存最近距离，供步长与合并检测共用 */
 function computeAccel() {
   const n = bodies.length;
+  let minD2 = Infinity;
   for (let i = 0; i < n; i++) { bodies[i].ax = 0; bodies[i].ay = 0; }
   for (let i = 0; i < n; i++) {
     const bi = bodies[i];
@@ -606,27 +598,21 @@ function computeAccel() {
       if (bj.kind === 'satellite') continue;
       const dx = bj.x - bi.x;
       const dy = bj.y - bi.y;
-      const d2 = dx * dx + dy * dy + SOFTENING * SOFTENING;
-      const inv = 1 / (d2 * Math.sqrt(d2));
+      const d2 = dx * dx + dy * dy;
+      if (d2 < minD2) minD2 = d2;
+      const d2s = d2 + SOFTENING * SOFTENING;
+      const inv = 1 / (d2s * Math.sqrt(d2s));
       const f = G * inv;
       bi.ax += f * bj.m * dx;  bi.ay += f * bj.m * dy;
       bj.ax -= f * bi.m * dx;  bj.ay -= f * bi.m * dy;
     }
   }
+  cachedMinD = minD2 === Infinity ? 1 : Math.sqrt(minD2);
 }
 
 function vvStep(maxH) {
-  let minD = Infinity;
-  for (let i = 0; i < bodies.length; i++) {
-    if (bodies[i].kind === 'satellite') continue;
-    for (let j = i + 1; j < bodies.length; j++) {
-      if (bodies[j].kind === 'satellite') continue;
-      const d = Math.hypot(bodies[j].x - bodies[i].x, bodies[j].y - bodies[i].y);
-      if (d < minD) minD = d;
-    }
-  }
-  /* Bug 1 修复：minD 可能为 0，加最小值防止 h=0 死循环 */
-  const h = Math.max(1e-9, Math.min(maxH, minD * 0.01));
+  /* ★ 固定步长。近距接近时由 checkOverlapMerge 提前合并 */
+  const h = Math.max(BASE_STEP, Math.min(maxH, cachedMinD * 0.01));
 
   for (const b of bodies) {
     if (b.kind === 'satellite') continue;
@@ -652,6 +638,63 @@ function vvStep(maxH) {
     b.vy = b.host.vy + Math.cos(b.orbitPhase) * tang;
   }
   return h;
+}
+
+/* ★ 提前合并 —— 当两个天体已经重叠时立即合并 */
+function checkOverlapMerge() {
+  const toRemove = new Set();
+  const events = [];
+  for (let i = 0; i < bodies.length; i++) {
+    const bi = bodies[i];
+    if (toRemove.has(bi) || bi.kind === 'satellite') continue;
+    for (let j = i + 1; j < bodies.length; j++) {
+      const bj = bodies[j];
+      if (toRemove.has(bj) || bj.kind === 'satellite') continue;
+
+      /* ★ 跳过"行星-小行星"对，交给 resolveCollisions（含卫星拦截） */
+      const isAstPla =
+        (bi.kind === 'asteroid' && bj.kind === 'planet') ||
+        (bi.kind === 'planet' && bj.kind === 'asteroid');
+      if (isAstPla) continue;
+
+      const d = Math.hypot(bj.x - bi.x, bj.y - bi.y);
+      if (d < collisionRadius(bi) + collisionRadius(bj)) {
+        const big   = bi.m >= bj.m ? bi : bj;
+        const small = bi.m >= bj.m ? bj : bi;
+
+        for (const s of bodies) {
+          if (s.kind === 'satellite' && s.host === small && !toRemove.has(s)) {
+            s.host = big;
+            const ddx = s.x - big.x, ddy = s.y - big.y;
+            s.orbitRadius = Math.max(0.15, Math.hypot(ddx, ddy));
+            s.orbitPhase = Math.atan2(ddy, ddx);
+            const vPhys = Math.sqrt(G * Math.max(big.m, 1e-9) / s.orbitRadius);
+            s.orbitAngularSpeed = (vPhys / s.orbitRadius) * SATELLITE_SPEED_MUL;
+          }
+        }
+        if (small.kind === 'planet' && (small.lifeStage === 'alive' || small.life > 0)) {
+          killLife(small, [255, 100, 60]);
+        }
+        const mergedM = big.m + small.m;
+        big.vx = (big.m * big.vx + small.m * small.vx) / mergedM;
+        big.vy = (big.m * big.vy + small.m * small.vy) / mergedM;
+        big.x  = (big.m * big.x  + small.m * small.x)  / mergedM;
+        big.y  = (big.m * big.y  + small.m * small.y)  / mergedM;
+        big.m  = mergedM;
+        big.sizeMul = Math.min(4.0, sizeFromMass(big.kind, big.typeKey, big.m));
+
+        if (selectedBody === small) selectedBody = big;
+        events.push({ x: big.x, y: big.y, t: 0, type: 'impact' });
+        toRemove.add(small);
+      }
+    }
+  }
+  if (toRemove.size === 0) return false;
+  if (selectedBody && toRemove.has(selectedBody)) selectedBody = null;
+  bodies = bodies.filter(b => !toRemove.has(b));
+  for (const ev of events) impactEvents.push(ev);
+  /* ★ E0 不重建：合并损失应体现为 ΔE 台阶 */
+  return true;
 }
 
 function totalEnergy() {
@@ -730,9 +773,7 @@ function resolveCollisions(simDt) {
       } else {
         const rA = collisionRadius(bi);
         const rB = collisionRadius(bj);
-        if (d < rA + rB) {
-          isCollision = true;
-        }
+        if (d < rA + rB) isCollision = true;
       }
 
       if (!isCollision) continue;
@@ -772,7 +813,6 @@ function resolveCollisions(simDt) {
           }
           events.push({ x: planet.x, y: planet.y, t: 0, type: 'impact' });
 
-          /* 动量守恒 + 位置取质心 */
           const mergedMP = planet.m + asteroid.m;
           planet.vx = (planet.m * planet.vx + asteroid.m * asteroid.vx) / mergedMP;
           planet.vy = (planet.m * planet.vy + asteroid.m * asteroid.vy) / mergedMP;
@@ -781,9 +821,7 @@ function resolveCollisions(simDt) {
           planet.m  = mergedMP;
           planet.sizeMul = Math.min(4.0, sizeFromMass(planet.kind, planet.typeKey, planet.m));
 
-          /* ★ 若跟随的是小行星，改为跟随行星 */
           if (selectedBody === asteroid) selectedBody = planet;
-
           toRemove.add(asteroid);
         }
       } else {
@@ -805,7 +843,6 @@ function resolveCollisions(simDt) {
 
         events.push({ x: big.x, y: big.y, t: 0, type: 'impact' });
 
-        /* 动量守恒 + 位置取质心 */
         const mergedM = big.m + small.m;
         big.vx = (big.m * big.vx + small.m * small.vx) / mergedM;
         big.vy = (big.m * big.vy + small.m * small.vy) / mergedM;
@@ -814,23 +851,17 @@ function resolveCollisions(simDt) {
         big.m  = mergedM;
         big.sizeMul = Math.min(4.0, sizeFromMass(big.kind, big.typeKey, big.m));
 
-        /* ★ 若跟随的是被吸收的天体，直接改为跟随吸收者 */
         if (selectedBody === small) selectedBody = big;
-
         toRemove.add(small);
       }
     }
   }
 
   if (toRemove.size > 0) {
-    /* 若跟随目标被吸收且未在上面切换，则清空跟随 */
-    if (selectedBody && toRemove.has(selectedBody)) {
-      selectedBody = null;
-    }
-
+    if (selectedBody && toRemove.has(selectedBody)) selectedBody = null;
     bodies = bodies.filter(b => !toRemove.has(b));
     computeAccel();
-    E0 = totalEnergy();
+    /* ★ E0 不重建：合并损失应体现为 ΔE 台阶 */
   }
 
   for (const ev of events) impactEvents.push(ev);
@@ -905,23 +936,36 @@ function placeBody(kind, typeKey, sizeMulVal, x, y, motion, host) {
     b.vx = host.vx - Math.sin(b.orbitPhase) * r * b.orbitAngularSpeed;
     b.vy = host.vy + Math.cos(b.orbitPhase) * r * b.orbitAngularSpeed;
   } else if (motion === 'orbit') {
+    /* ★ 两体解：新星绕系统质心做圆轨道，同时给已有天体加反冲，
+       保证总动量为零（否则系统会整体漂移 —— 就是你看到的"往下走"） */
     const { x: cx, y: cy, M } = getCentroid();
     if (M > 0) {
       const dx = x - cx, dy = y - cy;
       const r = Math.hypot(dx, dy);
       if (r > 1e-3) {
-        const v = Math.sqrt(G * M / r);
-        b.vx = -dy / r * v;
-        b.vy =  dx / r * v;
+        const totalM = M + b.m;
+        const vRel = Math.sqrt(G * totalM / r);
+        const ux = -dy / r, uy = dx / r;
+        const vNew = (M / totalM) * vRel;
+        b.vx = ux * vNew;
+        b.vy = uy * vNew;
+        const vRec = (b.m / totalM) * vRel;
+        for (const other of bodies) {
+          if (other.kind === 'satellite') continue;
+          other.vx -= ux * vRec;
+          other.vy -= uy * vRec;
+        }
       }
     }
   }
 
+  /* ★ E0 只在"从空宇宙放下第一个天体"时建立。
+     后续放置属于"外部操作"，能量自然改变，应体现在 ΔE 里而非重建基准。 */
+  const wasEmpty = bodies.length === 0;
   bodies.push(b);
-  /* 不再调用 removeDrift()，避免新加天体时改变已有天体速度 */
   computeAccel();
   sampleTrails();
-  E0 = totalEnergy();
+  if (wasEmpty) markE0Dirty();
   return b;
 }
 
@@ -963,13 +1007,11 @@ function deleteBody(b) {
   const i = bodies.indexOf(b);
   if (i >= 0) bodies.splice(i, 1);
   computeAccel();
-  E0 = totalEnergy();
   hoverBody = null;
+  /* ★ E0 不重建：删除导致的能量变化应反映在 ΔE 中 */
 }
 
 /* ===================== 相机 ===================== */
-
-/* 计算平滑后的系统尺度：只增不减（极缓慢衰减），避免双星椭圆轨道引起的缩放抖动 */
 function autoBaseScale() {
   if (!bodies.length) {
     smoothMaxD = 0.6;
@@ -982,14 +1024,11 @@ function autoBaseScale() {
     const d = Math.hypot(b.x - cx, b.y - cy);
     if (d > maxD) maxD = d;
   }
-
-  /* ★ 平滑：立刻跟上变大的情况，变小则缓慢回落 */
   if (maxD > smoothMaxD) {
     smoothMaxD = maxD;
   } else {
     smoothMaxD = smoothMaxD * 0.998 + maxD * 0.002;
   }
-
   return Math.max(Math.min(W, H) * 0.36 / smoothMaxD, 0.5);
 }
 
@@ -1353,6 +1392,9 @@ function render() {
 
 /* ===================== HUD ===================== */
 const hud = document.getElementById('hud');
+let __hudAccum = 0;
+let __lastEnergyText = '—';
+let __lastEnergyCalc = -1;
 
 function updateHUD() {
   if (!inGame) { hud.innerHTML = ''; return; }
@@ -1372,12 +1414,24 @@ function updateHUD() {
     else nm++;
   }
 
-  let energyStr = '—';
-  if (bodies.length) {
+  let energyStr = __lastEnergyText;
+  if (!bodies.length) {
+    /* ★ 空宇宙不显示"建立中…"，用 — 占位 */
+    energyStr = '—';
+  } else if (__e0Pending || !__e0Initialized) {
+    energyStr = '建立中…';
+  } else if (simTime - __lastEnergyCalc > 0.5 || __lastEnergyCalc < 0) {
     const E = totalEnergy();
     const abs = Math.abs(E - E0);
-    const rel = abs / (Math.abs(E0) + 0.5) * 100;
-    energyStr = `${abs.toFixed(3)} (${rel.toFixed(1)}%)`;
+    const absE0 = Math.abs(E0);
+    if (absE0 > 1e-3) {
+      const rel = abs / absE0 * 100;
+      energyStr = `${abs.toFixed(3)} (${rel.toFixed(1)}%)`;
+    } else {
+      energyStr = abs.toFixed(3);
+    }
+    __lastEnergyText = energyStr;
+    __lastEnergyCalc = simTime;
   }
 
   let lifeStr = '';
@@ -1438,13 +1492,39 @@ function loadSavesFromStorage() {
 
 function writeSavesToStorage() {
   try {
-    localStorage.setItem(SAVE_KEY, JSON.stringify(saves));
+    const json = JSON.stringify(saves);
+    if (json.length > 2 * 1024 * 1024) {
+      showToast('存档总大小超过 2M 字符，请删除部分旧存档', true);
+      return false;
+    }
+    localStorage.setItem(SAVE_KEY, json);
     return true;
   } catch (e) {
     console.warn('存档写入失败', e);
-    showToast('存档写入失败：存储空间可能已满', true);
+    const msg = (e && e.name === 'QuotaExceededError')
+      ? '浏览器存储空间已满，请清理部分旧存档'
+      : (e && e.message) || '未知错误';
+    showToast('存档写入失败：' + msg, true);
     return false;
   }
+}
+
+/* ★ 轨迹降采样 + 量化 */
+function sampleTrail(trail, maxPoints) {
+  const totalPts = Math.floor(trail.length / 2);
+  if (totalPts <= maxPoints) {
+    const out = new Array(trail.length);
+    for (let i = 0; i < trail.length; i++) out[i] = Math.round(trail[i] * 1000) / 1000;
+    return out;
+  }
+  const step = totalPts / maxPoints;
+  const out = [];
+  for (let i = 0; i < maxPoints; i++) {
+    const idx = Math.floor(i * step) * 2;
+    out.push(Math.round(trail[idx] * 1000) / 1000);
+    out.push(Math.round(trail[idx + 1] * 1000) / 1000);
+  }
+  return out;
 }
 
 function serializeState() {
@@ -1454,11 +1534,11 @@ function serializeState() {
     kind: b.kind, typeKey: b.typeKey, name: b.name, m: b.m,
     x: b.x, y: b.y, vx: b.vx, vy: b.vy,
     sizeMul: b.sizeMul, rMul: b.rMul, water: b.water, rgb: b.rgb.slice(),
-    trail: b.trail.slice(-1200),
+    trail: sampleTrail(b.trail, 30),
     hostIndex: b.host ? indexMap.get(b.host) : -1,
     orbitRadius: b.orbitRadius, orbitPhase: b.orbitPhase, orbitAngularSpeed: b.orbitAngularSpeed,
     life: b.life, lifeStage: b.lifeStage, gestationTimer: b.gestationTimer,
-    flash: b.flash, flashColor: b.flashColor, impactCooldown: b.impactCooldown,
+    flash: b.flash, flashColor: b.flashColor,
   }));
   return {
     version: 1, simTime,
@@ -1480,7 +1560,7 @@ function deserializeState(data) {
     host: null,
     orbitRadius: s.orbitRadius || 0, orbitPhase: s.orbitPhase || 0, orbitAngularSpeed: s.orbitAngularSpeed || 0,
     life: s.life || 0, lifeStage: s.lifeStage || 'barren', gestationTimer: s.gestationTimer || 0,
-    flash: s.flash || 0, flashColor: s.flashColor || null, impactCooldown: s.impactCooldown || 0,
+    flash: s.flash || 0, flashColor: s.flashColor || null,
   }));
   data.bodies.forEach((s, i) => {
     if (s.hostIndex >= 0 && bodies[s.hostIndex]) bodies[i].host = bodies[s.hostIndex];
@@ -1499,7 +1579,11 @@ function deserializeState(data) {
   selectedBody = (data.selectedBodyIndex >= 0 && bodies[data.selectedBodyIndex]) ? bodies[data.selectedBodyIndex] : null;
   impactEvents = [];
   computeAccel();
+  /* ★ 加载存档后立即锁定 E0 基准，不走延迟 */
   E0 = totalEnergy();
+  __e0Initialized = true;
+  __e0Pending = false; __e0DelayTimer = 0;
+  __lastEnergyCalc = -1;
   document.getElementById('btnPause').textContent = paused ? '继续' : '暂停';
   lastT = performance.now();
 }
@@ -1551,6 +1635,8 @@ function createEmptyUniverse() {
   selectedBody = null;
   simTime = 0; prevSimTime = 0;
   nextSample = SAMPLE_DT; acc = 0; E0 = 0;
+  __e0Initialized = false; __e0Pending = false; __e0DelayTimer = 0;
+  __lastEnergyCalc = -1;
   camX = 0; camY = 0; camScale = 220;
   camTarget.x = 0; camTarget.y = 0; camTarget.s = 220;
   userZoom = 1; userPanX = 0; userPanY = 0;
@@ -1594,7 +1680,8 @@ async function exportSave(id) {
   const save = saves.find(s => s.id === id);
   if (!save) return;
   const payload = { format: 'cosmic-sandbox-save', version: 1, exportedAt: Date.now(), save };
-  const data = JSON.stringify(payload, null, 2);
+  const data = JSON.stringify(payload);
+
   const safeName = (save.name || 'save').replace(/[\\/:*?"<>|\s]+/g, '_').slice(0, 40) || 'save';
   const filename = `宇宙模拟器_${safeName}.json`;
 
@@ -1928,10 +2015,13 @@ bindButton('btnClear', () => {
   selectedBody = null;
   simTime = 0; prevSimTime = 0;
   nextSample = SAMPLE_DT; acc = 0; E0 = 0;
+  __e0Initialized = false; __e0Pending = false; __e0DelayTimer = 0;
+  __lastEnergyCalc = -1;
   hoverBody = null;
   resetView();
   lastT = performance.now();
 });
+
 /* ---- 退出到首页（不保存） ---- */
 function exitToHome() {
   if (inGame) {
@@ -1942,6 +2032,8 @@ function exitToHome() {
   selectedBody = null;
   simTime = 0; prevSimTime = 0;
   nextSample = SAMPLE_DT; acc = 0; E0 = 0;
+  __e0Initialized = false; __e0Pending = false; __e0DelayTimer = 0;
+  __lastEnergyCalc = -1;
   camX = 0; camY = 0; camScale = 220;
   camTarget.x = 0; camTarget.y = 0; camTarget.s = 220;
   userZoom = 1; userPanX = 0; userPanY = 0;
@@ -1955,6 +2047,7 @@ function exitToHome() {
   lastT = performance.now();
 }
 bindButton('btnExit', exitToHome);
+
 /* ===================== 键盘快捷键 ===================== */
 window.addEventListener('keydown', e => {
   const tag = (e.target && e.target.tagName ? e.target.tagName : '').toUpperCase();
@@ -2154,8 +2247,6 @@ canvas.addEventListener('pointerleave', e => {
 });
 
 /* ===================== 主循环 ===================== */
-let lastT = performance.now();
-
 function frame(now) {
   requestAnimationFrame(frame);
   let dt = (now - lastT) / 1000;
@@ -2165,24 +2256,50 @@ function frame(now) {
 
   if (!paused && bodies.length) {
     acc += dt * speed;
+    /* ★ 动态限制本帧最大步数，防止 acc 累积导致一帧爆步 */
+    const maxStepsThisFrame = Math.min(MAX_STEPS, Math.ceil(acc / BASE_STEP) + 5);
     let steps = 0;
-    while (acc >= BASE_STEP && steps < MAX_STEPS) {
+    let mergeCount = 0;
+    while (acc >= BASE_STEP && steps < maxStepsThisFrame) {
+      /* ★ 天体已非常接近 → 立即合并 */
+      if (cachedMinD < OVERLAP_CHECK_DIST && mergeCount < 20) {
+        if (checkOverlapMerge()) {
+          computeAccel();
+          mergeCount++;
+          continue;
+        }
+      }
       const usedH = vvStep(BASE_STEP);
       acc -= usedH;
       simTime += usedH;
       steps++;
       if (simTime >= nextSample) { sampleTrails(); nextSample += SAMPLE_DT; }
     }
-    if (acc > BASE_STEP * MAX_STEPS) acc = 0;
+    /* ★ 截断而非清零 —— 保留时间连续性 */
+    if (acc > BASE_STEP * MAX_STEPS) acc = BASE_STEP * MAX_STEPS;
     const simDt = simTime - prevSimTime;
     prevSimTime = simTime;
     if (simDt > 0) updateLife(simDt);
   } else {
     prevSimTime = simTime;
   }
+
+  /* ★ E0 延迟建立：只在"空宇宙放第一个天体"后触发（markE0Dirty 唯一入口） */
+  if (__e0Pending) {
+    __e0DelayTimer += dt;
+    if (__e0DelayTimer > 0.5) {
+      E0 = totalEnergy();
+      __e0Initialized = true;
+      __e0Pending = false;
+      __lastEnergyCalc = -1;
+    }
+  }
+
   updateCamera(dt);
   render();
-  updateHUD();
+  /* ★ HUD 节流：约每 0.15 秒更新一次 */
+  __hudAccum += dt;
+  if (__hudAccum > 0.15) { __hudAccum = 0; updateHUD(); }
 }
 
 /* ===================== 启动 ===================== */
