@@ -405,10 +405,10 @@ window.addEventListener('resize', () => {
 
 /* ===================== 物理常量 ===================== */
 const G         = 1;
-const BASE_STEP = 0.0004;   /* ★ 步长翻倍，每帧物理步数减半 */
+const BASE_STEP = 0.0004;
 const SOFTENING = 0.06;
-const MAX_STEPS = 800;      /* ★ 从 6000 降到 800，配合动态步数限制 */
-const OVERLAP_CHECK_DIST = 0.15;   /* ★ 提前合并的最近距离阈值 */
+const MAX_STEPS = 800;
+const OVERLAP_CHECK_DIST = 0.15;
 const SAMPLE_DT = 0.02;
 const MAX_TRAIL = 1200;
 const CHUNK     = 16;
@@ -421,6 +421,9 @@ const SAT_INTERCEPT_PER = 0.35;
 const SAT_INTERCEPT_MAX = 0.75;
 
 const SIZE_FROM_MASS_EXP = 1 / 2.5;
+
+const MIN_ZOOM = 0.05;
+const MAX_ZOOM = 60;
 
 /* ===================== 天体类型表 ===================== */
 const STAR_TYPES = {
@@ -493,6 +496,9 @@ let inGame = false;
 let currentSaveId = null;
 
 let lastT = performance.now();
+
+/* ★ Bug 2 修复：将碰撞检测计数器移到模块级，跨帧累积 */
+let stepsSinceImpactCheck = 0;
 
 /* ★ E0 延迟建立（避免初始瞬态污染基准）
    ★ 只在两种时机触发：
@@ -585,7 +591,7 @@ function createBody(kind, typeKey, sizeMulVal, x, y) {
 }
 
 /* ===================== 物理积分 ===================== */
-let cachedMinD = Infinity;   /* ★ 缓存最近距离，供步长与合并检测共用 */
+let cachedMinD = Infinity;
 function computeAccel() {
   const n = bodies.length;
   let minD2 = Infinity;
@@ -610,9 +616,9 @@ function computeAccel() {
   cachedMinD = minD2 === Infinity ? 1 : Math.sqrt(minD2);
 }
 
-function vvStep(maxH) {
-  /* ★ 固定步长。近距接近时由 checkOverlapMerge 提前合并 */
-  const h = Math.max(BASE_STEP, Math.min(maxH, cachedMinD * 0.01));
+/* ★ 固定步长。近距接近时由 checkOverlapMerge 提前合并。 */
+function vvStep() {
+  const h = BASE_STEP;
 
   for (const b of bodies) {
     if (b.kind === 'satellite') continue;
@@ -693,7 +699,6 @@ function checkOverlapMerge() {
   if (selectedBody && toRemove.has(selectedBody)) selectedBody = null;
   bodies = bodies.filter(b => !toRemove.has(b));
   for (const ev of events) impactEvents.push(ev);
-  /* ★ E0 不重建：合并损失应体现为 ΔE 台阶 */
   return true;
 }
 
@@ -739,7 +744,7 @@ function collisionRadius(b) {
   return 0.05;
 }
 
-function resolveCollisions(simDt) {
+function resolveCollisions() {
   const toRemove = new Set();
   const events = [];
 
@@ -861,7 +866,6 @@ function resolveCollisions(simDt) {
     if (selectedBody && toRemove.has(selectedBody)) selectedBody = null;
     bodies = bodies.filter(b => !toRemove.has(b));
     computeAccel();
-    /* ★ E0 不重建：合并损失应体现为 ΔE 台阶 */
   }
 
   for (const ev of events) impactEvents.push(ev);
@@ -870,7 +874,7 @@ function resolveCollisions(simDt) {
 /* ===================== 生命演化 ===================== */
 function updateLife(simDt) {
   if (simDt <= 0) return;
-  resolveCollisions(simDt);
+  /* ★ resolveCollisions 已移至主循环物理步内，此处不再调用 */
 
   for (const b of bodies) {
     if (b.kind !== 'planet') continue;
@@ -936,31 +940,42 @@ function placeBody(kind, typeKey, sizeMulVal, x, y, motion, host) {
     b.vx = host.vx - Math.sin(b.orbitPhase) * r * b.orbitAngularSpeed;
     b.vy = host.vy + Math.cos(b.orbitPhase) * r * b.orbitAngularSpeed;
   } else if (motion === 'orbit') {
-    /* ★ 两体解：新星绕系统质心做圆轨道，同时给已有天体加反冲，
-       保证总动量为零（否则系统会整体漂移 —— 就是你看到的"往下走"） */
-    const { x: cx, y: cy, M } = getCentroid();
-    if (M > 0) {
-      const dx = x - cx, dy = y - cy;
+    /* ★ 找主导天体（质量最大的非卫星天体），只与它构成两体圆轨道。 */
+    let dominant = null;
+    let maxMass = 0;
+    for (const other of bodies) {
+      if (other.kind === 'satellite') continue;
+      if (other.m > maxMass) { maxMass = other.m; dominant = other; }
+    }
+
+    if (dominant) {
+      const dx = x - dominant.x, dy = y - dominant.y;
       const r = Math.hypot(dx, dy);
-      if (r > 1e-3) {
-        const totalM = M + b.m;
-        const vRel = Math.sqrt(G * totalM / r);
+      /* ★ 隐患修复：给 minR 加上上限，避免红巨星拉满时周围 1.5 半径内只能静止放置。 */
+      const minR = Math.max(0.3, Math.min(1.0, collisionRadius(dominant) * 3));
+      
+      if (r > minR) {
+        const totalM = dominant.m + b.m;
+        /* ★ 限制最大圆轨道速度，防止极端情况速度爆炸。 */
+        const vRel = Math.min(Math.sqrt(G * totalM / r), 8);
         const ux = -dy / r, uy = dx / r;
-        const vNew = (M / totalM) * vRel;
-        b.vx = ux * vNew;
-        b.vy = uy * vNew;
-        const vRec = (b.m / totalM) * vRel;
-        for (const other of bodies) {
-          if (other.kind === 'satellite') continue;
-          other.vx -= ux * vRec;
-          other.vy -= uy * vRec;
-        }
+
+        /* ★ Bug 1 修复：把 dominant 的当前速度纳入计算。
+           两体圆轨道的正确解（保持动量守恒 + 相对速度 = vRel·切向）：
+           dominant.v' = (m_a·v_a - m_b·vRel·u) / totalM
+           b.v         = m_a·(v_a + vRel·u) / totalM
+           v_a = 0 时退化为原实现；v_a ≠ 0（双星/漂移系统）时修正。 */
+        const vAx = dominant.vx, vAy = dominant.vy;
+        dominant.vx = (dominant.m * vAx - b.m * vRel * ux) / totalM;
+        dominant.vy = (dominant.m * vAy - b.m * vRel * uy) / totalM;
+        b.vx = (dominant.m / totalM) * (vAx + vRel * ux);
+        b.vy = (dominant.m / totalM) * (vAy + vRel * uy);
       }
+      /* r <= minR：静止放置，让引力自然决定命运（被捕获、被弹飞、或落入主导天体）。 */
     }
   }
 
-  /* ★ E0 只在"从空宇宙放下第一个天体"时建立。
-     后续放置属于"外部操作"，能量自然改变，应体现在 ΔE 里而非重建基准。 */
+  /* ★ E0 只在"从空宇宙放下第一个天体"时建立。 */
   const wasEmpty = bodies.length === 0;
   bodies.push(b);
   computeAccel();
@@ -1008,14 +1023,20 @@ function deleteBody(b) {
   if (i >= 0) bodies.splice(i, 1);
   computeAccel();
   hoverBody = null;
-  /* ★ E0 不重建：删除导致的能量变化应反映在 ΔE 中 */
 }
 
 /* ===================== 相机 ===================== */
-function autoBaseScale() {
+/* ★ 纯函数：只读取 smoothMaxD，不修改状态 */
+function computeBaseScale() {
+  if (!bodies.length) return 220;
+  return Math.max(Math.min(W, H) * 0.36 / Math.max(smoothMaxD, 0.01), 0.5);
+}
+
+/* ★ 有副作用：更新 smoothMaxD，只在 updateCamera 里调用 */
+function updateSmoothMaxD() {
   if (!bodies.length) {
     smoothMaxD = 0.6;
-    return 220;
+    return;
   }
   const { x: cx, y: cy } = getCentroid();
   let maxD = 0.6;
@@ -1024,23 +1045,29 @@ function autoBaseScale() {
     const d = Math.hypot(b.x - cx, b.y - cy);
     if (d > maxD) maxD = d;
   }
-  if (maxD > smoothMaxD) {
+  /* ★ 骤降检测：若当前尺度远小于平滑值，直接重置，避免删除天体后缩放卡住 */
+  if (maxD < smoothMaxD * 0.3) {
+    smoothMaxD = maxD;
+  } else if (maxD > smoothMaxD) {
     smoothMaxD = maxD;
   } else {
     smoothMaxD = smoothMaxD * 0.998 + maxD * 0.002;
   }
-  return Math.max(Math.min(W, H) * 0.36 / smoothMaxD, 0.5);
+}
+
+function clampUserZoom(z) {
+  return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
 }
 
 function updateCamera(dt) {
   if (isGesturing) return;
+  updateSmoothMaxD();
 
   if (selectedBody && bodies.indexOf(selectedBody) >= 0) {
     const k = Math.min(1, dt * 16);
     camTarget.x = selectedBody.x + userPanX;
     camTarget.y = selectedBody.y + userPanY;
-    const base = autoBaseScale();
-    camTarget.s = base * userZoom;
+    camTarget.s = computeBaseScale() * userZoom;
     camX += (camTarget.x - camX) * k;
     camY += (camTarget.y - camY) * k;
     camScale += (camTarget.s - camScale) * k;
@@ -1062,7 +1089,7 @@ function updateCamera(dt) {
   const { x: cx, y: cy } = getCentroid();
   camTarget.x = cx + userPanX;
   camTarget.y = cy + userPanY;
-  camTarget.s = autoBaseScale() * userZoom;
+  camTarget.s = computeBaseScale() * userZoom;
 
   camX += (camTarget.x - camX) * k;
   camY += (camTarget.y - camY) * k;
@@ -1084,7 +1111,7 @@ function panByKey(dx, dy) {
 }
 
 function zoomBy(factor) {
-  userZoom = Math.max(0.05, Math.min(60, userZoom * factor));
+  userZoom = clampUserZoom(userZoom * factor);
 }
 
 function togglePause() {
@@ -1416,7 +1443,6 @@ function updateHUD() {
 
   let energyStr = __lastEnergyText;
   if (!bodies.length) {
-    /* ★ 空宇宙不显示"建立中…"，用 — 占位 */
     energyStr = '—';
   } else if (__e0Pending || !__e0Initialized) {
     energyStr = '建立中…';
@@ -2145,6 +2171,8 @@ canvas.addEventListener('pointermove', e => {
   if (!p.moved && Math.hypot(ddx, ddy) > 8) p.moved = true;
 
   if (activePointers.size === 1 && panState) {
+    /* ★ 微动不平移，避免"点一下"时相机偏移 */
+    if (!p.moved) return;
     const dx = p.x - panState.startX;
     const dy = p.y - panState.startY;
     const newCamX = panState.startCamX - dx / panState.startScale;
@@ -2158,19 +2186,21 @@ canvas.addEventListener('pointermove', e => {
     const [a, b] = [...activePointers.values()];
     const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1;
     const factor = dist / pinchState.startDist;
-    const newScale = Math.max(0.5, Math.min(1e6, pinchState.startScale * factor));
+    const rawScale = pinchState.startScale * factor;
+    /* ★ 用纯函数 computeBaseScale，避免副作用 */
+    const base = computeBaseScale();
+    userZoom = clampUserZoom(rawScale / base);
+    const actualScale = base * userZoom;
     const cx = (a.x + b.x) * 0.5;
     const cy = (a.y + b.y) * 0.5;
-    const newCamX = pinchState.anchorWX - (cx - W * 0.5) / newScale;
-    const newCamY = pinchState.anchorWY + (cy - H * 0.5) / newScale;
-    const base = autoBaseScale();
-    userZoom = Math.max(0.05, Math.min(60, newScale / base));
+    const newCamX = pinchState.anchorWX - (cx - W * 0.5) / actualScale;
+    const newCamY = pinchState.anchorWY + (cy - H * 0.5) / actualScale;
     const ref = getRefPoint();
     userPanX = newCamX - ref.x;
     userPanY = newCamY - ref.y;
     camX = camTarget.x = newCamX;
     camY = camTarget.y = newCamY;
-    camScale = camTarget.s = newScale;
+    camScale = camTarget.s = actualScale;
   }
 });
 
@@ -2229,8 +2259,9 @@ canvas.addEventListener('wheel', e => {
   const mx = e.clientX, my = e.clientY;
   const wx = camX + (mx - W * 0.5) / camScale;
   const wy = camY - (my - H * 0.5) / camScale;
-  const base = autoBaseScale();
-  userZoom = Math.max(0.05, Math.min(60, userZoom * factor));
+  /* ★ 用纯函数 computeBaseScale，避免副作用 */
+  const base = computeBaseScale();
+  userZoom = clampUserZoom(userZoom * factor);
   const newScale = base * userZoom;
   const newCamX = wx - (mx - W * 0.5) / newScale;
   const newCamY = wy + (my - H * 0.5) / newScale;
@@ -2256,12 +2287,11 @@ function frame(now) {
 
   if (!paused && bodies.length) {
     acc += dt * speed;
-    /* ★ 动态限制本帧最大步数，防止 acc 累积导致一帧爆步 */
     const maxStepsThisFrame = Math.min(MAX_STEPS, Math.ceil(acc / BASE_STEP) + 5);
     let steps = 0;
     let mergeCount = 0;
+    
     while (acc >= BASE_STEP && steps < maxStepsThisFrame) {
-      /* ★ 天体已非常接近 → 立即合并 */
       if (cachedMinD < OVERLAP_CHECK_DIST && mergeCount < 20) {
         if (checkOverlapMerge()) {
           computeAccel();
@@ -2269,13 +2299,25 @@ function frame(now) {
           continue;
         }
       }
-      const usedH = vvStep(BASE_STEP);
+      const usedH = vvStep();
       acc -= usedH;
       simTime += usedH;
       steps++;
-      if (simTime >= nextSample) { sampleTrails(); nextSample += SAMPLE_DT; }
+      /* ★ Bug 2 修复：stepsSinceImpactCheck 已移至模块级，跨帧累积 */
+      stepsSinceImpactCheck++;
+
+      /* ★ 每 10 个物理步做一次碰撞检测，防止高速小行星穿透行星 */
+      if (stepsSinceImpactCheck >= 10) {
+        resolveCollisions();
+        stepsSinceImpactCheck = 0;
+      }
+
+      if (simTime >= nextSample) {
+        sampleTrails();
+        /* ★ 用 simTime 重置，避免一帧跨多个 SAMPLE_DT 时重复采样同一位置 */
+        nextSample = simTime + SAMPLE_DT;
+      }
     }
-    /* ★ 截断而非清零 —— 保留时间连续性 */
     if (acc > BASE_STEP * MAX_STEPS) acc = BASE_STEP * MAX_STEPS;
     const simDt = simTime - prevSimTime;
     prevSimTime = simTime;
@@ -2284,7 +2326,7 @@ function frame(now) {
     prevSimTime = simTime;
   }
 
-  /* ★ E0 延迟建立：只在"空宇宙放第一个天体"后触发（markE0Dirty 唯一入口） */
+  /* ★ E0 延迟建立：只在"空宇宙放第一个天体"后触发 */
   if (__e0Pending) {
     __e0DelayTimer += dt;
     if (__e0DelayTimer > 0.5) {
@@ -2297,7 +2339,6 @@ function frame(now) {
 
   updateCamera(dt);
   render();
-  /* ★ HUD 节流：约每 0.15 秒更新一次 */
   __hudAccum += dt;
   if (__hudAccum > 0.15) { __hudAccum = 0; updateHUD(); }
 }
