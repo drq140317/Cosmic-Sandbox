@@ -430,6 +430,8 @@ const OVERLAP_CHECK_DIST = 0.15;
 const SAMPLE_DT = 0.02;
 const MAX_TRAIL = 1200;
 const TRAIL_TRIM = 400;        /* ★ 性能：轨迹超限时一次裁掉一整块，而不是每次采样都 splice */
+/* ★ 修复：轨迹分块屏幕剔除的边距（像素） */
+const TRAIL_CULL = 64;
 const CHUNK     = 16;
 const TWO_PI    = Math.PI * 2;
 const SOFTENING2 = SOFTENING * SOFTENING;
@@ -446,6 +448,14 @@ const SIZE_FROM_MASS_EXP = 1 / 2.5;
 
 const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 60;
+/* ★ 修复：视角缩放全局上限。camScale = 基准 × userZoom，基准在 smoothMaxD
+   极小时会爆掉（computeBaseScale 无上限），必须兜底，否则轨迹/圆弧会生成
+   上百万像素的几何，把低端机直接拖死。 */
+const MAX_CAM_SCALE = 20000;
+/* ★ 修复：存档反序列化的物理量绝对值上限，防止损坏/恶意存档把模拟打成 Infinity / NaN */
+const MAX_SAVE_MASS  = 1e6;
+const MAX_SAVE_POS   = 1e4;
+const MAX_SAVE_SPEED = 1e3;
 
 /* ===================== 天体类型表 ===================== */
 const STAR_TYPES = {
@@ -557,6 +567,13 @@ function clampNum(v, lo, hi) {
   const n = (typeof v === 'number') ? v : parseFloat(v);
   if (!Number.isFinite(n)) return lo;
   return Math.min(hi, Math.max(lo, n));
+}
+
+/* ★ 修复：绝对值上限（存档反序列化用），非有限值退回 0 */
+function clampAbs(v, lim) {
+  const n = (typeof v === 'number') ? v : parseFloat(v);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(-lim, Math.min(lim, n));
 }
 
 function numOr(v, fallback) {
@@ -1138,6 +1155,12 @@ function clampUserZoom(z) {
   return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
 }
 
+/* ★ 修复：最终缩放（基准 × userZoom）的全局兜底，保证渲染/交互用到的 camScale 有界 */
+function clampCamScale(s) {
+  if (!Number.isFinite(s)) return 220;
+  return Math.max(0.02, Math.min(MAX_CAM_SCALE, s));
+}
+
 function updateCamera(dt) {
   if (isGesturing) return;
   updateSmoothMaxD();
@@ -1146,10 +1169,10 @@ function updateCamera(dt) {
     const k = Math.min(1, dt * 16);
     camTarget.x = selectedBody.x + userPanX;
     camTarget.y = selectedBody.y + userPanY;
-    camTarget.s = computeBaseScale() * userZoom;
+    camTarget.s = clampCamScale(computeBaseScale() * userZoom);
     camX += (camTarget.x - camX) * k;
     camY += (camTarget.y - camY) * k;
-    camScale += (camTarget.s - camScale) * k;
+    camScale = clampCamScale(camScale + (camTarget.s - camScale) * k);
     return;
   }
 
@@ -1158,21 +1181,21 @@ function updateCamera(dt) {
   if (!bodies.length) {
     camTarget.x = userPanX;
     camTarget.y = userPanY;
-    camTarget.s = 220 * userZoom;
+    camTarget.s = clampCamScale(220 * userZoom);
     camX += (camTarget.x - camX) * k * 0.5;
     camY += (camTarget.y - camY) * k * 0.5;
-    camScale += (camTarget.s - camScale) * k * 0.5;
+    camScale = clampCamScale(camScale + (camTarget.s - camScale) * k * 0.5);
     return;
   }
 
   const { x: cx, y: cy } = getCentroid();
   camTarget.x = cx + userPanX;
   camTarget.y = cy + userPanY;
-  camTarget.s = computeBaseScale() * userZoom;
+  camTarget.s = clampCamScale(computeBaseScale() * userZoom);
 
   camX += (camTarget.x - camX) * k;
   camY += (camTarget.y - camY) * k;
-  camScale += (camTarget.s - camScale) * k;
+  camScale = clampCamScale(camScale + (camTarget.s - camScale) * k);
 }
 
 function resetView() {
@@ -1250,9 +1273,30 @@ function coreRadius(b) {
    颜色其实只有类型表里那十几种。改成按颜色预渲染离屏精灵，
    之后每帧只做 drawImage（Canvas 的 drawImage 有硬件加速路径，比渐变填充便宜得多）。 */
 const __glowSprites = new Map();
-function glowSprite(key, r, g, bl, kind) {
+const GLOW_SPRITE_MAX = 64;
+/* ★ 修复：颜色量化（每通道 /8 取整）+ 数量上限。
+   原来 key 直接用原始 rgb，导入的存档里上千种颜色会各自生成一张
+   192×192 离屏画布（约 147KB/张），低端机直接 OOM。 */
+function glowKey(r, g, bl, kind) {
+  const q = function (v) {
+    const n = Math.round(numOr(v, 0) / 8) * 8;
+    return Math.max(0, Math.min(255, n));
+  };
+  return kind + '|' + q(r) + ',' + q(g) + ',' + q(bl);
+}
+function glowSprite(r, g, bl, kind) {
+  const key = glowKey(r, g, bl, kind);
   let cv = __glowSprites.get(key);
-  if (cv) return cv;
+  if (cv) {
+    /* 命中后移到队尾，让 Map 的插入顺序近似 LRU */
+    __glowSprites.delete(key);
+    __glowSprites.set(key, cv);
+    return cv;
+  }
+  if (__glowSprites.size >= GLOW_SPRITE_MAX) {
+    const oldest = __glowSprites.keys().next().value;
+    if (oldest !== undefined) __glowSprites.delete(oldest);
+  }
   const S = 96;
   cv = document.createElement('canvas');
   cv.width = cv.height = S * 2;
@@ -1284,9 +1328,9 @@ function glowSprite(key, r, g, bl, kind) {
   __glowSprites.set(key, cv);
   return cv;
 }
-function drawGlow(key, r, g, bl, kind, x, y, radius, alpha) {
+function drawGlow(r, g, bl, kind, x, y, radius, alpha) {
   if (!(radius > 0.5)) return;
-  const sprite = glowSprite(key, r, g, bl, kind);
+  const sprite = glowSprite(r, g, bl, kind);
   if (alpha !== undefined && alpha !== 1) ctx.globalAlpha = alpha;
   ctx.drawImage(sprite, x - radius, y - radius, radius * 2, radius * 2);
   if (alpha !== undefined && alpha !== 1) ctx.globalAlpha = 1;
@@ -1405,13 +1449,21 @@ function render() {
       const e = Math.min(s + CHUNK * stride, n - 1);
       const a = baseA * Math.pow(s / invN, 1.7);
       if (a < 0.008) continue;
+      /* ★ 修复：分块屏幕剔除 —— 整块轨迹都在视口同侧之外就跳过，
+         极端缩放下不再生成上百万像素的路径 */
+      const sxA = SX(t[s * 2]), syA = SY(t[s * 2 + 1]);
+      const sxB = SX(t[e * 2]), syB = SY(t[e * 2 + 1]);
+      if ((sxA < -TRAIL_CULL && sxB < -TRAIL_CULL) ||
+          (sxA > W + TRAIL_CULL && sxB > W + TRAIL_CULL) ||
+          (syA < -TRAIL_CULL && syB < -TRAIL_CULL) ||
+          (syA > H + TRAIL_CULL && syB > H + TRAIL_CULL)) continue;
       ctx.globalAlpha = a;
       ctx.beginPath();
-      ctx.moveTo(SX(t[s * 2]), SY(t[s * 2 + 1]));
+      ctx.moveTo(sxA, syA);
       for (let k = s + stride; k <= e; k += stride) {
         ctx.lineTo(SX(t[k * 2]), SY(t[k * 2 + 1]));
       }
-      if ((e - s) % stride !== 0) ctx.lineTo(SX(t[e * 2]), SY(t[e * 2 + 1]));
+      if ((e - s) % stride !== 0) ctx.lineTo(sxB, syB);
       ctx.stroke();
     }
   }
@@ -1442,22 +1494,19 @@ function render() {
       const lifeR = core * (2.2 + b.life * 3.4) * 4;
       const pulse = 1 + 0.06 * Math.sin(simTime * 2.4);
       ctx.globalAlpha = 1;
-      drawGlow('life', 0, 0, 0, 'life', x, y, lifeR * pulse, Math.min(1, b.life * 0.55));
+      drawGlow(0, 0, 0, 'life', x, y, lifeR * pulse, Math.min(1, b.life * 0.55));
     }
 
     if (b.kind === 'planet' && b.flash > 0 && b.flashColor) {
       const [fr, fg, fb] = b.flashColor;
       const flashR = core * (3.0 + (1 - b.flash) * 6.0) * 4;
       ctx.globalAlpha = 1;
-      drawGlow(`flash|${fr},${fg},${fb}`, fr, fg, fb, 'flash', x, y, flashR, b.flash);
+      drawGlow(fr, fg, fb, 'flash', x, y, flashR, b.flash);
     }
 
     /* ★ 性能：核心光晕改走预渲染精灵，省掉每帧一次 createRadialGradient */
     ctx.globalAlpha = 1;
-    drawGlow(
-      `${isStar ? 'cs' : 'cb'}|${r},${g},${bl}`, r, g, bl,
-      isStar ? 'core-star' : 'core-body', x, y, R
-    );
+    drawGlow(r, g, bl, isStar ? 'core-star' : 'core-body', x, y, R);
 
     if (b.water && !isStar) {
       ctx.globalAlpha = 0.5;
@@ -1729,9 +1778,12 @@ function sanitizeBodyStates(list) {
     out.push({
       kind: s.kind, typeKey,
       name: (typeof s.name === 'string' && s.name.trim()) ? s.name.trim().slice(0, 40) : t.name,
-      m: Math.max(numOr(s.m, t.mass), 1e-12),
-      x: numOr(s.x, 0), y: numOr(s.y, 0),
-      vx: numOr(s.vx, 0), vy: numOr(s.vy, 0), ax: 0, ay: 0,
+      /* ★ 修复：存档里的物理量必须有绝对值上限，否则损坏/恶意存档
+         能把位置与速度打成 Infinity，整个模拟直接废掉 */
+      m: clampAbs(Math.max(numOr(s.m, t.mass), 1e-12), MAX_SAVE_MASS),
+      x: clampAbs(numOr(s.x, 0), MAX_SAVE_POS), y: clampAbs(numOr(s.y, 0), MAX_SAVE_POS),
+      vx: clampAbs(numOr(s.vx, 0), MAX_SAVE_SPEED), vy: clampAbs(numOr(s.vy, 0), MAX_SAVE_SPEED),
+      ax: 0, ay: 0,
       sizeMul: clampNum(numOr(s.sizeMul, 1), 0.2, 6),
       rMul: Math.max(numOr(s.rMul, t.rMul || 1), 0.1),
       water: (s.water === undefined) ? !!t.water : !!s.water,
@@ -1819,7 +1871,7 @@ function deserializeState(data) {
   stepsSinceImpactCheck = 0;
   camX = numOr(data.camX, 0);
   camY = numOr(data.camY, 0);
-  camScale = Math.max(0.5, numOr(data.camScale, 220));
+  camScale = clampCamScale(Math.max(0.5, numOr(data.camScale, 220)));
   camTarget.x = camX; camTarget.y = camY; camTarget.s = camScale;
   userZoom = clampUserZoom(numOr(data.userZoom, 1));
   userPanX = numOr(data.userPanX, 0);
@@ -2397,6 +2449,13 @@ canvas.addEventListener('pointerdown', e => {
   refreshGesturing();
   updateCursor();
 
+  /* ★ 修复：三指及以上时手势模型（1 指平移 / 2 指缩放）无法处理，
+     直接清空指针状态，避免相机永久卡在"手势中"不再跟随 */
+  if (activePointers.size > 2) {
+    clearPointerState();
+    return;
+  }
+
   if (activePointers.size === 1) {
     const p = activePointers.get(e.pointerId);
     panState = { startCamX: camX, startCamY: camY, startScale: camScale, startX: p.startX, startY: p.startY };
@@ -2444,7 +2503,7 @@ canvas.addEventListener('pointermove', e => {
     /* ★ 用纯函数 computeBaseScale，避免副作用 */
     const base = computeBaseScale();
     userZoom = clampUserZoom(rawScale / base);
-    const actualScale = base * userZoom;
+    const actualScale = clampCamScale(base * userZoom);
     const cx = (a.x + b.x) * 0.5;
     const cy = (a.y + b.y) * 0.5;
     const newCamX = pinchState.anchorWX - (cx - W * 0.5) / actualScale;
@@ -2531,7 +2590,7 @@ canvas.addEventListener('wheel', e => {
   /* ★ 用纯函数 computeBaseScale，避免副作用 */
   const base = computeBaseScale();
   userZoom = clampUserZoom(userZoom * factor);
-  const newScale = base * userZoom;
+  const newScale = clampCamScale(base * userZoom);
   const newCamX = wx - (mx - W * 0.5) / newScale;
   const newCamY = wy + (my - H * 0.5) / newScale;
   const ref = getRefPoint();
@@ -2576,6 +2635,10 @@ function frame(now) {
   lastT = now;
   if (dt > 0.05) dt = 0.05;
   if (!inGame) return;
+
+  /* ★ 修复：特效老化用的时间步 —— 有物理步进时跟随模拟时间，
+     否则（暂停 / 无天体 / 该帧没有步进）退化为真实帧间隔 */
+  let fxDt = 0;
 
   if (!paused && bodies.length) {
     acc += dt * speed;
@@ -2625,9 +2688,9 @@ function frame(now) {
 
     const simDt = simTime - prevSimTime;
     prevSimTime = simTime;
+    /* ★ 修复：特效改为独立于物理步老化 */
+    fxDt = simDt > 0 ? simDt : dt;
     if (simDt > 0) {
-      /* 闪光 / 撞击环需要逐帧衰减（便宜） */
-      ageImpactEffects(simDt);
       /* 生命与宜居带判定是慢变量，按 ~12Hz 节拍更新 */
       __lifeAccum += simDt;
       if (__lifeAccum >= LIFE_TICK) {
@@ -2637,7 +2700,11 @@ function frame(now) {
     }
   } else {
     prevSimTime = simTime;
+    /* ★ 修复：暂停 / 空宇宙时特效仍然按真实时间淡出，不再永久定格 */
+    fxDt = dt;
   }
+
+  ageImpactEffects(fxDt);
 
   /* ★ E0 延迟建立：只在"空宇宙放第一个天体"后触发 */
   if (__e0Pending) {
