@@ -375,10 +375,16 @@ const canvas = document.getElementById('c');
 const ctx    = canvas.getContext('2d');
 let W = 0, H = 0, DPR = 1;
 let stars = [];
+/* ★ 性能：星星按亮度分桶，渲染时每桶只发一次 fill（原来是一颗一颗 fillRect + 改 alpha） */
+const STAR_BUCKETS = 6;
+let starBuckets = [];
 
 let __lastResizeW = 0, __lastResizeH = 0, __lastDPR = 0;
 function resize() {
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  /* ★ 性能：DPR 上限从 2 降到 1.5。
+     手机上 DPR=2 时 1080×2400 的屏会变成 2160×4800 ≈ 1000 万像素，
+     每帧一次全屏 fillRect + 合成，是中低端机上最大的一笔固定开销。 */
+  const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
   const newW = window.innerWidth, newH = window.innerHeight;
   /* ★ 修复：DPR 变化（浏览器缩放 / 跨屏拖动）也必须重建画布，否则画面会糊或错位 */
   if (newW === __lastResizeW && newH === __lastResizeH && dpr === __lastDPR && W > 0) return;
@@ -397,6 +403,12 @@ function resize() {
       r: Math.random() * 1.3 + 0.25,
       a: Math.random() * 0.55 + 0.12
     });
+  }
+  starBuckets = [];
+  for (let k = 0; k < STAR_BUCKETS; k++) starBuckets.push([]);
+  for (const s of stars) {
+    const k = Math.min(STAR_BUCKETS - 1, Math.max(0, Math.floor(s.a / 0.67 * STAR_BUCKETS)));
+    starBuckets[k].push(s);
   }
 }
 let __resizeTimer = null;
@@ -417,8 +429,12 @@ const MAX_STEPS = 800;
 const OVERLAP_CHECK_DIST = 0.15;
 const SAMPLE_DT = 0.02;
 const MAX_TRAIL = 1200;
+const TRAIL_TRIM = 400;        /* ★ 性能：轨迹超限时一次裁掉一整块，而不是每次采样都 splice */
 const CHUNK     = 16;
 const TWO_PI    = Math.PI * 2;
+const SOFTENING2 = SOFTENING * SOFTENING;
+const PHYS_PAIR_BUDGET = 8e5;  /* ★ 性能：每帧「天体对数 × 物理步数」预算 */
+const LIFE_TICK = 0.08;        /* ★ 性能：生命/宜居带演化按 ~12Hz 更新即可 */
 
 const SATELLITE_SPEED_MUL = 12;
 const IMPACT_BASE_R     = 0.28;
@@ -510,6 +526,9 @@ let lastT = performance.now();
 
 /* ★ Bug 2 修复：将碰撞检测计数器移到模块级，跨帧累积 */
 let stepsSinceImpactCheck = 0;
+
+/* ★ 性能：生命/宜居带节拍累加器（见 updateLife 与主循环） */
+let __lifeAccum = 0;
 
 /* ★ E0 延迟建立（避免初始瞬态污染基准）
    ★ 只在两种时机触发：
@@ -625,24 +644,32 @@ function createBody(kind, typeKey, sizeMulVal, x, y) {
 let cachedMinD = Infinity;
 function computeAccel() {
   const n = bodies.length;
+  const bs = bodies;
   let minD2 = Infinity;
-  for (let i = 0; i < n; i++) { bodies[i].ax = 0; bodies[i].ay = 0; }
+  for (let i = 0; i < n; i++) { bs[i].ax = 0; bs[i].ay = 0; }
   for (let i = 0; i < n; i++) {
-    const bi = bodies[i];
+    const bi = bs[i];
     if (bi.kind === 'satellite') continue;
+    /* ★ 性能：把 bi 的加速度累加在局部变量里，内层循环只做算术，
+       避免每对天体 6 次对象属性读写（这是 O(n²) 热点，实测最见效的一处） */
+    const xi = bi.x, yi = bi.y, mi = bi.m;
+    /* 注意：必须从当前值起累加 —— 前面的外层循环作为 bj 已经给 bi 写入了加速度 */
+    let axi = bi.ax, ayi = bi.ay;
     for (let j = i + 1; j < n; j++) {
-      const bj = bodies[j];
+      const bj = bs[j];
       if (bj.kind === 'satellite') continue;
-      const dx = bj.x - bi.x;
-      const dy = bj.y - bi.y;
+      const dx = bj.x - xi;
+      const dy = bj.y - yi;
       const d2 = dx * dx + dy * dy;
       if (d2 < minD2) minD2 = d2;
-      const d2s = d2 + SOFTENING * SOFTENING;
+      const d2s = d2 + SOFTENING2;
       const inv = 1 / (d2s * Math.sqrt(d2s));
       const f = G * inv;
-      bi.ax += f * bj.m * dx;  bi.ay += f * bj.m * dy;
-      bj.ax -= f * bi.m * dx;  bj.ay -= f * bi.m * dy;
+      axi += f * bj.m * dx;  ayi += f * bj.m * dy;
+      const fj = f * mi;
+      bj.ax -= fj * dx;      bj.ay -= fj * dy;
     }
+    bi.ax = axi; bi.ay = ayi;
   }
   cachedMinD = minD2 === Infinity ? 1 : Math.sqrt(minD2);
 }
@@ -756,8 +783,12 @@ function totalEnergy() {
 function sampleTrails() {
   const maxLen = MAX_TRAIL * 2;
   for (const b of bodies) {
-    b.trail.push(b.x, b.y);
-    if (b.trail.length > maxLen) b.trail.splice(0, b.trail.length - maxLen);
+    const t = b.trail;
+    t.push(b.x, b.y);
+    /* ★ 性能：以前每次采样都 splice(0,1)，等于每次 O(n) 搬整个数组，
+       一秒钟 200 次采样 × 上百个天体 = 大量搬运与 GC 抖动。
+       现在只在超出 TRAIL_TRIM 时才裁一次，摊还成本接近 0。 */
+    if (t.length > maxLen + TRAIL_TRIM) t.splice(0, t.length - maxLen);
   }
 }
 
@@ -909,13 +940,25 @@ function resolveCollisions() {
 }
 
 /* ===================== 生命演化 ===================== */
+/* ★ 性能：这里原来每帧对每个行星都跑一遍 getHabitabilityInfo（内部又遍历所有天体），
+   天体一多就是 O(行星 × 天体) / 帧。生命本身是慢变量（+0.06/秒、-0.05/秒），
+   12Hz 更新与 60Hz 肉眼无差别。
+   ★ 另外把"闪光 / 撞击环"这类必须逐帧线性衰减的效果拆成 ageImpactEffects。 */
+function ageImpactEffects(dt) {
+  if (dt <= 0) return;
+  for (const ev of impactEvents) ev.t += dt;
+  if (impactEvents.length) impactEvents = impactEvents.filter(ev => ev.t < 1.2);
+  for (const b of bodies) {
+    if (b.flash > 0) b.flash = Math.max(0, b.flash - dt * 1.6);
+  }
+}
+
 function updateLife(simDt) {
   if (simDt <= 0) return;
   /* ★ resolveCollisions 已移至主循环物理步内，此处不再调用 */
 
   for (const b of bodies) {
     if (b.kind !== 'planet') continue;
-    if (b.flash > 0) b.flash = Math.max(0, b.flash - simDt * 1.6);
     const info = getHabitabilityInfo(b);
 
     if (info.tooHot) {
@@ -951,8 +994,6 @@ function updateLife(simDt) {
       }
     }
   }
-  for (const ev of impactEvents) ev.t += simDt;
-  impactEvents = impactEvents.filter(ev => ev.t < 1.2);
 }
 
 /* ===================== 放置天体 ===================== */
@@ -1205,6 +1246,52 @@ function coreRadius(b) {
 }
 
 /* ===================== 渲染 ===================== */
+/* ★ 性能：星体光晕原来是「每个天体每帧一次 createRadialGradient + fill」，
+   颜色其实只有类型表里那十几种。改成按颜色预渲染离屏精灵，
+   之后每帧只做 drawImage（Canvas 的 drawImage 有硬件加速路径，比渐变填充便宜得多）。 */
+const __glowSprites = new Map();
+function glowSprite(key, r, g, bl, kind) {
+  let cv = __glowSprites.get(key);
+  if (cv) return cv;
+  const S = 96;
+  cv = document.createElement('canvas');
+  cv.width = cv.height = S * 2;
+  const c2 = cv.getContext('2d');
+  const grd = c2.createRadialGradient(S, S, 0, S, S, S);
+  if (kind === 'core-star') {
+    grd.addColorStop(0.00, 'rgba(255,255,255,0.98)');
+    grd.addColorStop(0.10, `rgba(${r},${g},${bl},0.95)`);
+    grd.addColorStop(0.32, `rgba(${r},${g},${bl},0.30)`);
+    grd.addColorStop(0.65, `rgba(${r},${g},${bl},0.08)`);
+    grd.addColorStop(1.00, `rgba(${r},${g},${bl},0)`);
+  } else if (kind === 'core-body') {
+    grd.addColorStop(0.00, 'rgba(255,255,255,0.95)');
+    grd.addColorStop(0.16, `rgba(${r},${g},${bl},0.92)`);
+    grd.addColorStop(0.42, `rgba(${r},${g},${bl},0.26)`);
+    grd.addColorStop(1.00, `rgba(${r},${g},${bl},0)`);
+  } else if (kind === 'flash') {
+    grd.addColorStop(0.00, `rgba(${r},${g},${bl},0.75)`);
+    grd.addColorStop(0.45, `rgba(${r},${g},${bl},0.28)`);
+    grd.addColorStop(1.00, `rgba(${r},${g},${bl},0)`);
+  } else { /* life */
+    grd.addColorStop(0.00, 'rgba(140,255,180,1)');
+    grd.addColorStop(0.22, 'rgba( 90,235,140,0.55)');
+    grd.addColorStop(0.55, 'rgba( 60,200,110,0.18)');
+    grd.addColorStop(1.00, 'rgba( 40,170, 90,0)');
+  }
+  c2.fillStyle = grd;
+  c2.beginPath(); c2.arc(S, S, S, 0, TWO_PI); c2.fill();
+  __glowSprites.set(key, cv);
+  return cv;
+}
+function drawGlow(key, r, g, bl, kind, x, y, radius, alpha) {
+  if (!(radius > 0.5)) return;
+  const sprite = glowSprite(key, r, g, bl, kind);
+  if (alpha !== undefined && alpha !== 1) ctx.globalAlpha = alpha;
+  ctx.drawImage(sprite, x - radius, y - radius, radius * 2, radius * 2);
+  if (alpha !== undefined && alpha !== 1) ctx.globalAlpha = 1;
+}
+
 function render() {
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
   ctx.globalCompositeOperation = 'source-over';
@@ -1213,10 +1300,16 @@ function render() {
   ctx.fillStyle = '#04050a';
   ctx.fillRect(0, 0, W, H);
 
+  /* ★ 性能：星空按亮度分桶，每桶一次 fill。
+     原来 300+ 颗星就是 300+ 次 fillRect + globalAlpha 赋值，纯属浪费。 */
   ctx.fillStyle = '#9db2cc';
-  for (const s of stars) {
-    ctx.globalAlpha = s.a;
-    ctx.fillRect(s.x, s.y, s.r, s.r);
+  for (let k = 0; k < starBuckets.length; k++) {
+    const bucket = starBuckets[k];
+    if (!bucket.length) continue;
+    ctx.globalAlpha = (k + 0.5) / STAR_BUCKETS * 0.67;
+    ctx.beginPath();
+    for (const s of bucket) ctx.rect(s.x, s.y, s.r, s.r);
+    ctx.fill();
   }
   ctx.globalAlpha = 1;
 
@@ -1303,16 +1396,22 @@ function render() {
     ctx.strokeStyle = `rgb(${r},${g},${bl})`;
     ctx.lineWidth = isStar ? 1.5 : (isSat ? 0.9 : 1.1);
 
-    for (let s = 0; s < n - 1; s += CHUNK) {
-      const e = Math.min(s + CHUNK, n - 1);
-      const a = (isStar ? 0.50 : (isSat ? 0.35 : 0.42)) * Math.pow(s / (n - 1), 1.7);
+    /* ★ 性能：轨迹满时是 1200 点，每帧要发几十次 stroke；点太多就按步长抽稀
+       （屏幕上看不出差别），并把每段的点数收敛到 CHUNK 附近 */
+    const stride = n > 480 ? Math.ceil(n / 480) : 1;
+    const baseA = isStar ? 0.50 : (isSat ? 0.35 : 0.42);
+    const invN = n - 1;
+    for (let s = 0; s < n - 1; s += CHUNK * stride) {
+      const e = Math.min(s + CHUNK * stride, n - 1);
+      const a = baseA * Math.pow(s / invN, 1.7);
       if (a < 0.008) continue;
       ctx.globalAlpha = a;
       ctx.beginPath();
       ctx.moveTo(SX(t[s * 2]), SY(t[s * 2 + 1]));
-      for (let k = s + 1; k <= e; k++) {
+      for (let k = s + stride; k <= e; k += stride) {
         ctx.lineTo(SX(t[k * 2]), SY(t[k * 2 + 1]));
       }
+      if ((e - s) % stride !== 0) ctx.lineTo(SX(t[e * 2]), SY(t[e * 2 + 1]));
       ctx.stroke();
     }
   }
@@ -1342,45 +1441,23 @@ function render() {
     if (b.kind === 'planet' && b.life > 0.02) {
       const lifeR = core * (2.2 + b.life * 3.4) * 4;
       const pulse = 1 + 0.06 * Math.sin(simTime * 2.4);
-      const grd = ctx.createRadialGradient(x, y, 0, x, y, lifeR * pulse);
-      const baseA = b.life * 0.55;
-      grd.addColorStop(0.00, `rgba(140,255,180,${baseA})`);
-      grd.addColorStop(0.22, `rgba( 90,235,140,${baseA * 0.55})`);
-      grd.addColorStop(0.55, `rgba( 60,200,110,${baseA * 0.18})`);
-      grd.addColorStop(1.00, 'rgba( 40,170, 90,0)');
       ctx.globalAlpha = 1;
-      ctx.fillStyle = grd;
-      ctx.beginPath(); ctx.arc(x, y, lifeR * pulse, 0, TWO_PI); ctx.fill();
+      drawGlow('life', 0, 0, 0, 'life', x, y, lifeR * pulse, Math.min(1, b.life * 0.55));
     }
 
     if (b.kind === 'planet' && b.flash > 0 && b.flashColor) {
       const [fr, fg, fb] = b.flashColor;
       const flashR = core * (3.0 + (1 - b.flash) * 6.0) * 4;
-      const grd = ctx.createRadialGradient(x, y, 0, x, y, flashR);
-      grd.addColorStop(0.00, `rgba(${fr},${fg},${fb},${b.flash * 0.75})`);
-      grd.addColorStop(0.45, `rgba(${fr},${fg},${fb},${b.flash * 0.28})`);
-      grd.addColorStop(1.00, `rgba(${fr},${fg},${fb},0)`);
       ctx.globalAlpha = 1;
-      ctx.fillStyle = grd;
-      ctx.beginPath(); ctx.arc(x, y, flashR, 0, TWO_PI); ctx.fill();
+      drawGlow(`flash|${fr},${fg},${fb}`, fr, fg, fb, 'flash', x, y, flashR, b.flash);
     }
 
-    const grd = ctx.createRadialGradient(x, y, 0, x, y, R);
-    if (isStar) {
-      grd.addColorStop(0.00, 'rgba(255,255,255,0.98)');
-      grd.addColorStop(0.10, `rgba(${r},${g},${bl},0.95)`);
-      grd.addColorStop(0.32, `rgba(${r},${g},${bl},0.30)`);
-      grd.addColorStop(0.65, `rgba(${r},${g},${bl},0.08)`);
-      grd.addColorStop(1.00, `rgba(${r},${g},${bl},0)`);
-    } else {
-      grd.addColorStop(0.00, 'rgba(255,255,255,0.95)');
-      grd.addColorStop(0.16, `rgba(${r},${g},${bl},0.92)`);
-      grd.addColorStop(0.42, `rgba(${r},${g},${bl},0.26)`);
-      grd.addColorStop(1.00, `rgba(${r},${g},${bl},0)`);
-    }
+    /* ★ 性能：核心光晕改走预渲染精灵，省掉每帧一次 createRadialGradient */
     ctx.globalAlpha = 1;
-    ctx.fillStyle = grd;
-    ctx.beginPath(); ctx.arc(x, y, R, 0, TWO_PI); ctx.fill();
+    drawGlow(
+      `${isStar ? 'cs' : 'cb'}|${r},${g},${bl}`, r, g, bl,
+      isStar ? 'core-star' : 'core-body', x, y, R
+    );
 
     if (b.water && !isStar) {
       ctx.globalAlpha = 0.5;
@@ -1727,6 +1804,12 @@ function deserializeState(data) {
     }
   });
   /* ★ 宿主丢失的卫星直接丢弃，否则会永远静止悬在原地 */
+  /* ★ 修复：selectedBodyIndex 存的是"原始数组下标"，而 sanitize 可能丢弃非法条目、
+     上面的 filter 又可能再剔掉无宿主卫星 —— 下标会错位。这里先用 rawToNew 映射成
+     真正的天体对象，最后再校验它是否还活着。 */
+  const __selRaw = Number.isInteger(data.selectedBodyIndex) ? data.selectedBodyIndex : -1;
+  const __selBody = (__selRaw >= 0 && parsed.rawToNew.has(__selRaw))
+    ? bodies[parsed.rawToNew.get(__selRaw)] : null;
   bodies = bodies.filter(b => b.kind !== 'satellite' || b.host);
 
   simTime = Math.max(0, numOr(data.simTime, 0));
@@ -1757,8 +1840,8 @@ function deserializeState(data) {
   setSizeMul(numOr(data.sizeMul, 1));
   setMotion(data.placeMotion === 'static' ? 'static' : 'orbit');
 
-  selectedBody = (Number.isInteger(data.selectedBodyIndex) && bodies[data.selectedBodyIndex])
-    ? bodies[data.selectedBodyIndex] : null;
+  selectedBody = (__selBody && bodies.indexOf(__selBody) >= 0) ? __selBody : null;
+  __lifeAccum = 0;
 
   computeAccel();
   /* ★ 加载存档后立即锁定 E0 基准，不走延迟 */
@@ -2475,6 +2558,7 @@ function resetWorldState() {
   nextSample = SAMPLE_DT; acc = 0; E0 = 0;
   cachedMinD = Infinity;
   stepsSinceImpactCheck = 0;
+  __lifeAccum = 0;
   __e0Initialized = false; __e0Pending = false; __e0DelayTimer = 0;
   __lastEnergyCalc = -1; __lastEnergyText = '—';
   camX = 0; camY = 0; camScale = 220;
@@ -2495,7 +2579,16 @@ function frame(now) {
 
   if (!paused && bodies.length) {
     acc += dt * speed;
-    const maxStepsThisFrame = Math.min(MAX_STEPS, Math.ceil(acc / BASE_STEP) + 5);
+
+    /* ★ 性能 / 防卡死：以前 maxStepsThisFrame 只受 MAX_STEPS=800 约束，
+       速度 4× + 天体一多就是「几百步 × O(n²) 引力」，一帧要几十毫秒，
+       于是下一帧 acc 更大 → 更多步 → 彻底卡死（死亡螺旋）。
+       现在按「天体对数 × 步数」给每帧一个预算：天体少不受影响，
+       天体多则自动减少步数（时间变慢但画面依然流畅）。 */
+    const nb = bodies.length;
+    const pairs = nb > 1 ? nb * (nb - 1) * 0.5 : 1;
+    const stepBudget = Math.max(24, Math.floor(PHYS_PAIR_BUDGET / pairs));
+    const maxStepsThisFrame = Math.min(MAX_STEPS, stepBudget, Math.ceil(acc / BASE_STEP) + 5);
     let steps = 0;
     let mergeCount = 0;
 
@@ -2526,10 +2619,22 @@ function frame(now) {
         nextSample = simTime + SAMPLE_DT;
       }
     }
-    if (acc > BASE_STEP * MAX_STEPS) acc = BASE_STEP * MAX_STEPS;
+    /* ★ 被预算截断时直接丢掉时间债，否则 acc 会一直涨、永远被截断 */
+    if (steps >= maxStepsThisFrame) acc = Math.min(acc, BASE_STEP);
+    else if (acc > BASE_STEP * MAX_STEPS) acc = BASE_STEP * MAX_STEPS;
+
     const simDt = simTime - prevSimTime;
     prevSimTime = simTime;
-    if (simDt > 0) updateLife(simDt);
+    if (simDt > 0) {
+      /* 闪光 / 撞击环需要逐帧衰减（便宜） */
+      ageImpactEffects(simDt);
+      /* 生命与宜居带判定是慢变量，按 ~12Hz 节拍更新 */
+      __lifeAccum += simDt;
+      if (__lifeAccum >= LIFE_TICK) {
+        updateLife(__lifeAccum);
+        __lifeAccum = 0;
+      }
+    }
   } else {
     prevSimTime = simTime;
   }
