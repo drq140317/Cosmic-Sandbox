@@ -346,7 +346,7 @@
   <div class="modal-content">
     <div class="modal-head">
       <div id="modalTitle">
-        选择存档
+        <span id="modalHeading">选择存档</span>
         <span class="subtitle" id="modalSubtitle">加载一个已有的宇宙，或新建一个</span>
       </div>
       <button id="modalClose">✕</button>
@@ -376,12 +376,14 @@ const ctx    = canvas.getContext('2d');
 let W = 0, H = 0, DPR = 1;
 let stars = [];
 
-let __lastResizeW = 0, __lastResizeH = 0;
+let __lastResizeW = 0, __lastResizeH = 0, __lastDPR = 0;
 function resize() {
-  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const newW = window.innerWidth, newH = window.innerHeight;
-  if (newW === __lastResizeW && newH === __lastResizeH && W > 0) return;
-  __lastResizeW = newW; __lastResizeH = newH;
+  /* ★ 修复：DPR 变化（浏览器缩放 / 跨屏拖动）也必须重建画布，否则画面会糊或错位 */
+  if (newW === __lastResizeW && newH === __lastResizeH && dpr === __lastDPR && W > 0) return;
+  __lastResizeW = newW; __lastResizeH = newH; __lastDPR = dpr;
+  DPR = dpr;
   W = newW; H = newH;
   canvas.width  = Math.round(W * DPR);
   canvas.height = Math.round(H * DPR);
@@ -401,6 +403,10 @@ let __resizeTimer = null;
 window.addEventListener('resize', () => {
   clearTimeout(__resizeTimer);
   __resizeTimer = setTimeout(resize, 150);
+});
+window.addEventListener('orientationchange', () => {
+  clearTimeout(__resizeTimer);
+  __resizeTimer = setTimeout(resize, 250);
 });
 
 /* ===================== 物理常量 ===================== */
@@ -461,6 +467,11 @@ const CATEGORIES = {
   satellite: { label: '卫星',   types: SATELLITE_TYPES },
 };
 
+const CATEGORY_KEYS = Object.keys(CATEGORIES);
+const MODE_KEYS = ['star', 'planet', 'asteroid', 'satellite', 'follow', 'delete'];
+function isCategory(v) { return typeof v === 'string' && Object.prototype.hasOwnProperty.call(CATEGORIES, v); }
+function isMode(v) { return MODE_KEYS.indexOf(v) >= 0; }
+
 /* ===================== 全局状态 ===================== */
 let bodies = [];
 let simTime = 0;
@@ -514,6 +525,26 @@ function markE0Dirty() {
 }
 
 /* ===================== 工具 ===================== */
+function escHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => (
+    c === '&' ? '&amp;' :
+    c === '<' ? '&lt;' :
+    c === '>' ? '&gt;' :
+    c === '"' ? '&quot;' : '&#39;'
+  ));
+}
+
+function clampNum(v, lo, hi) {
+  const n = (typeof v === 'number') ? v : parseFloat(v);
+  if (!Number.isFinite(n)) return lo;
+  return Math.min(hi, Math.max(lo, n));
+}
+
+function numOr(v, fallback) {
+  const n = (typeof v === 'number') ? v : parseFloat(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 function getCentroid() {
   let M = 0, cx = 0, cy = 0;
   for (const b of bodies) {
@@ -533,8 +564,9 @@ function getRefPoint() {
 }
 
 function sizeFromMass(kind, typeKey, mass) {
-  const baseMass = CATEGORIES[kind].types[typeKey].mass;
-  return Math.pow(mass / baseMass, SIZE_FROM_MASS_EXP);
+  const table = CATEGORIES[kind] && CATEGORIES[kind].types;
+  const baseMass = (table && table[typeKey] && table[typeKey].mass) || 1;
+  return Math.pow(Math.max(mass, 1e-12) / baseMass, SIZE_FROM_MASS_EXP);
 }
 
 /* ===================== 宜居带 ===================== */
@@ -589,7 +621,6 @@ function createBody(kind, typeKey, sizeMulVal, x, y) {
     flash: 0, flashColor: null,
   };
 }
-
 /* ===================== 物理积分 ===================== */
 let cachedMinD = Infinity;
 function computeAccel() {
@@ -654,6 +685,10 @@ function checkOverlapMerge() {
     const bi = bodies[i];
     if (toRemove.has(bi) || bi.kind === 'satellite') continue;
     for (let j = i + 1; j < bodies.length; j++) {
+      /* ★ 修复：bi 可能在本轮内已经被合并掉（它变成了 small），
+         必须立刻停止用它继续合并，否则后面的天体会被合进一个即将被删除的
+         天体里 —— 两个天体一起消失，质量凭空蒸发 */
+      if (toRemove.has(bi)) break;
       const bj = bodies[j];
       if (toRemove.has(bj) || bj.kind === 'satellite') continue;
 
@@ -754,6 +789,8 @@ function resolveCollisions() {
     if (bi.kind === 'satellite') continue;
 
     for (let j = i + 1; j < bodies.length; j++) {
+      /* ★ 修复：同上 —— bi 被合并掉后不能再参与后续合并，否则天体凭空消失 */
+      if (toRemove.has(bi)) break;
       const bj = bodies[j];
       if (toRemove.has(bj)) continue;
       if (bj.kind === 'satellite') continue;
@@ -920,10 +957,12 @@ function updateLife(simDt) {
 
 /* ===================== 放置天体 ===================== */
 function placeBody(kind, typeKey, sizeMulVal, x, y, motion, host) {
+  if (!isCategory(kind)) return null;
+  if (!CATEGORIES[kind].types[typeKey]) typeKey = Object.keys(CATEGORIES[kind].types)[0];
   const b = createBody(kind, typeKey, sizeMulVal, x, y);
 
   if (kind === 'satellite') {
-    if (!host) return null;
+    if (!host || host.kind === 'satellite') return null;
     b.host = host;
     const dx = x - host.x, dy = y - host.y;
     let r = Math.hypot(dx, dy);
@@ -953,7 +992,7 @@ function placeBody(kind, typeKey, sizeMulVal, x, y, motion, host) {
       const r = Math.hypot(dx, dy);
       /* ★ 隐患修复：给 minR 加上上限，避免红巨星拉满时周围 1.5 半径内只能静止放置。 */
       const minR = Math.max(0.3, Math.min(1.0, collisionRadius(dominant) * 3));
-      
+
       if (r > minR) {
         const totalM = dominant.m + b.m;
         /* ★ 限制最大圆轨道速度，防止极端情况速度爆炸。 */
@@ -1009,7 +1048,6 @@ function findHostForSatellite(px, py) {
   }
   return best;
 }
-
 function deleteBody(b) {
   if (selectedBody === b) selectedBody = null;
   for (let k = bodies.length - 1; k >= 0; k--) {
@@ -1103,6 +1141,50 @@ function resetView() {
   smoothMaxD = 0.6;
 }
 
+/* ===================== 界面状态同步 =====================
+   ★ 修复：paused / speed / sizeMul / 初速 / 宜居带 以前散落在多处手写赋值，
+   导致"新建宇宙/退出/加载存档"后按钮文字与实际状态不一致（例如暂停后
+   新建宇宙，宇宙一开始就是冻结的，按钮却仍显示"暂停"）。
+   现在所有入口统一走下面这几个 setter。 */
+function setPaused(v) {
+  paused = !!v;
+  const btn = document.getElementById('btnPause');
+  if (btn) btn.textContent = paused ? '继续' : '暂停';
+  lastT = performance.now();
+}
+
+function togglePause() { setPaused(!paused); }
+
+function setSpeed(v) {
+  speed = clampNum(v, 0.1, 4);
+  const slider = document.getElementById('speed');
+  if (slider) slider.value = String(speed);
+  const lbl = document.getElementById('speedVal');
+  if (lbl) lbl.textContent = speed.toFixed(1) + '×';
+}
+
+function setSizeMul(v) {
+  sizeMul = clampNum(v, 0.5, 2.5);
+  const slider = document.getElementById('size');
+  if (slider) slider.value = String(sizeMul);
+  const lbl = document.getElementById('sizeVal');
+  if (lbl) lbl.textContent = sizeMul.toFixed(1) + '×';
+}
+
+function setMotion(v) {
+  placeMotion = (v === 'static') ? 'static' : 'orbit';
+  const on = document.getElementById('motOrbit');
+  const off = document.getElementById('motStatic');
+  if (on) on.classList.toggle('active', placeMotion === 'orbit');
+  if (off) off.classList.toggle('active', placeMotion === 'static');
+}
+
+function setHabitableZone(v) {
+  showHabitableZone = !!v;
+  const btn = document.getElementById('btnHabitable');
+  if (btn) btn.classList.toggle('active', showHabitableZone);
+}
+
 /* ===================== 键盘辅助 ===================== */
 function panByKey(dx, dy) {
   const step = 90 / camScale;
@@ -1112,13 +1194,6 @@ function panByKey(dx, dy) {
 
 function zoomBy(factor) {
   userZoom = clampUserZoom(userZoom * factor);
-}
-
-function togglePause() {
-  paused = !paused;
-  const btn = document.getElementById('btnPause');
-  btn.textContent = paused ? '继续' : '暂停';
-  lastT = performance.now();
 }
 
 /* ===================== 渲染尺寸 ===================== */
@@ -1416,7 +1491,6 @@ function render() {
   ctx.globalCompositeOperation = 'source-over';
   ctx.globalAlpha = 1;
 }
-
 /* ===================== HUD ===================== */
 const hud = document.getElementById('hud');
 let __hudAccum = 0;
@@ -1470,12 +1544,13 @@ function updateHUD() {
 
   let followStr = '';
   if (selectedBody && bodies.indexOf(selectedBody) >= 0) {
-    followStr = ` <span class="k">|</span> <span class="follow">跟随：${selectedBody.name}</span>`;
+    /* ★ 修复：名称来自存档（可被导入的 JSON 控制），必须转义后再拼进 innerHTML */
+    followStr = ` <span class="k">|</span> <span class="follow">跟随：${escHtml(selectedBody.name)}</span>`;
   }
 
   let saveStr = '';
   const curSave = saves.find(s => s.id === currentSaveId);
-  if (curSave) saveStr = ` <span class="k">|</span> <span class="save">📁 ${curSave.name}</span>`;
+  if (curSave) saveStr = ` <span class="k">|</span> <span class="save">📁 ${escHtml(curSave.name)}</span>`;
 
   hud.innerHTML =
     `<span class="t">宇宙模拟器</span> · ` +
@@ -1512,7 +1587,7 @@ function loadSavesFromStorage() {
     const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) { saves = []; return; }
     const arr = JSON.parse(raw);
-    saves = Array.isArray(arr) ? arr : [];
+    saves = Array.isArray(arr) ? arr.filter(s => s && typeof s === 'object' && typeof s.id === 'string') : [];
   } catch (e) { console.warn('存档读取失败', e); saves = []; }
 }
 
@@ -1553,6 +1628,52 @@ function sampleTrail(trail, maxPoints) {
   return out;
 }
 
+/* ★ 反序列化校验：存档/导入的 JSON 不再被直接信任
+   （以前只要 kind/typeKey 写错就会抛异常，rgb 不是数组会渲染成 rgb(NaN)，
+     hostIndex 指向自己会让卫星自引用而漂走） */
+function sanitizeBodyStates(list) {
+  const out = [];
+  const rawToNew = new Map();
+  list.forEach((s, idx) => {
+    if (!s || typeof s !== 'object' || !isCategory(s.kind)) return;
+    const table = CATEGORIES[s.kind].types;
+    let typeKey = s.typeKey;
+    if (typeof typeKey !== 'string' || !Object.prototype.hasOwnProperty.call(table, typeKey)) {
+      typeKey = Object.keys(table)[0];
+    }
+    const t = table[typeKey];
+    const trailIn = Array.isArray(s.trail) ? s.trail.filter(v => Number.isFinite(v)) : [];
+    let trail = trailIn.length >= 2 ? trailIn.slice(-120) : [numOr(s.x, 0), numOr(s.y, 0)];
+    if (trail.length % 2) trail = trail.slice(0, trail.length - 1);
+    if (trail.length < 2) trail = [numOr(s.x, 0), numOr(s.y, 0)];
+    const rgbIn = (Array.isArray(s.rgb) && s.rgb.length >= 3) ? s.rgb.slice(0, 3) : t.rgb;
+    const flashIn = (Array.isArray(s.flashColor) && s.flashColor.length >= 3) ? s.flashColor.slice(0, 3) : null;
+    rawToNew.set(idx, out.length);
+    out.push({
+      kind: s.kind, typeKey,
+      name: (typeof s.name === 'string' && s.name.trim()) ? s.name.trim().slice(0, 40) : t.name,
+      m: Math.max(numOr(s.m, t.mass), 1e-12),
+      x: numOr(s.x, 0), y: numOr(s.y, 0),
+      vx: numOr(s.vx, 0), vy: numOr(s.vy, 0), ax: 0, ay: 0,
+      sizeMul: clampNum(numOr(s.sizeMul, 1), 0.2, 6),
+      rMul: Math.max(numOr(s.rMul, t.rMul || 1), 0.1),
+      water: (s.water === undefined) ? !!t.water : !!s.water,
+      rgb: rgbIn.map(c => Math.round(clampNum(c, 0, 255))),
+      trail,
+      host: null,
+      orbitRadius: Math.max(0, numOr(s.orbitRadius, 0)),
+      orbitPhase: numOr(s.orbitPhase, 0),
+      orbitAngularSpeed: Math.max(0, numOr(s.orbitAngularSpeed, 0)),
+      life: clampNum(numOr(s.life, 0), 0, 1),
+      lifeStage: (s.lifeStage === 'alive' || s.lifeStage === 'gestating') ? s.lifeStage : 'barren',
+      gestationTimer: Math.max(0, numOr(s.gestationTimer, 0)),
+      flash: clampNum(numOr(s.flash, 0), 0, 1),
+      flashColor: flashIn ? flashIn.map(c => Math.round(clampNum(c, 0, 255))) : null,
+    });
+  });
+  return { bodies: out, rawToNew };
+}
+
 function serializeState() {
   const indexMap = new Map();
   bodies.forEach((b, i) => indexMap.set(b, i));
@@ -1571,6 +1692,9 @@ function serializeState() {
     camX, camY, camScale,
     userZoom, userPanX, userPanY,
     showHabitableZone,
+    /* ★ 修复：界面/模拟状态一起存，避免"读档后速度、暂停、模式跟存档不一致" */
+    speed, sizeMul, placeMotion, paused, mode,
+    catType: { star: catType.star, planet: catType.planet, asteroid: catType.asteroid, satellite: catType.satellite },
     selectedBodyIndex: selectedBody ? indexMap.get(selectedBody) : -1,
     bodies: serializedBodies,
   };
@@ -1578,39 +1702,72 @@ function serializeState() {
 
 function deserializeState(data) {
   if (!data || !Array.isArray(data.bodies)) throw new Error('存档数据格式不正确');
-  bodies = data.bodies.map(s => ({
-    kind: s.kind, typeKey: s.typeKey, name: s.name, m: s.m,
-    x: s.x, y: s.y, vx: s.vx || 0, vy: s.vy || 0, ax: 0, ay: 0,
-    sizeMul: s.sizeMul, rMul: s.rMul || 1, water: !!s.water,
-    rgb: (s.rgb || [200,200,200]).slice(), trail: (s.trail || [s.x, s.y]).slice(),
-    host: null,
-    orbitRadius: s.orbitRadius || 0, orbitPhase: s.orbitPhase || 0, orbitAngularSpeed: s.orbitAngularSpeed || 0,
-    life: s.life || 0, lifeStage: s.lifeStage || 'barren', gestationTimer: s.gestationTimer || 0,
-    flash: s.flash || 0, flashColor: s.flashColor || null,
-  }));
+  const parsed = sanitizeBodyStates(data.bodies);
+  bodies = parsed.bodies;
+
+  /* ★ 卫星宿主重建：只接受合法索引，禁止自引用，宿主必须是恒星或行星 */
   data.bodies.forEach((s, i) => {
-    if (s.hostIndex >= 0 && bodies[s.hostIndex]) bodies[i].host = bodies[s.hostIndex];
+    if (!s || typeof s !== 'object') return;
+    const hi = s.hostIndex;
+    if (!Number.isInteger(hi) || hi === i) return;
+    const from = parsed.rawToNew.get(i);
+    const to = parsed.rawToNew.get(hi);
+    if (from === undefined || to === undefined) return;
+    const sat = bodies[from], host = bodies[to];
+    if (!sat || !host || sat.kind !== 'satellite') return;
+    if (host.kind !== 'star' && host.kind !== 'planet') return;
+    const ddx = sat.x - host.x, ddy = sat.y - host.y;
+    const dist = Math.hypot(ddx, ddy);
+    sat.host = host;
+    sat.orbitRadius = Math.max(0.05, dist);
+    sat.orbitPhase = dist > 1e-6 ? Math.atan2(ddy, ddx) : numOr(sat.orbitPhase, 0);
+    if (!(sat.orbitAngularSpeed > 0)) {
+      const vPhys = Math.sqrt(G * Math.max(host.m, 1e-9) / sat.orbitRadius);
+      sat.orbitAngularSpeed = (vPhys / sat.orbitRadius) * SATELLITE_SPEED_MUL;
+    }
   });
-  simTime = data.simTime || 0;
+  /* ★ 宿主丢失的卫星直接丢弃，否则会永远静止悬在原地 */
+  bodies = bodies.filter(b => b.kind !== 'satellite' || b.host);
+
+  simTime = Math.max(0, numOr(data.simTime, 0));
   prevSimTime = simTime;
-  nextSample = SAMPLE_DT; acc = 0;
-  camX = data.camX || 0; camY = data.camY || 0; camScale = data.camScale || 220;
+  nextSample = simTime + SAMPLE_DT;
+  acc = 0;
+  stepsSinceImpactCheck = 0;
+  camX = numOr(data.camX, 0);
+  camY = numOr(data.camY, 0);
+  camScale = Math.max(0.5, numOr(data.camScale, 220));
   camTarget.x = camX; camTarget.y = camY; camTarget.s = camScale;
-  userZoom = data.userZoom || 1;
-  userPanX = data.userPanX || 0;
-  userPanY = data.userPanY || 0;
+  userZoom = clampUserZoom(numOr(data.userZoom, 1));
+  userPanX = numOr(data.userPanX, 0);
+  userPanY = numOr(data.userPanY, 0);
   smoothMaxD = 0.6;
-  showHabitableZone = !!data.showHabitableZone;
-  document.getElementById('btnHabitable').classList.toggle('active', showHabitableZone);
-  selectedBody = (data.selectedBodyIndex >= 0 && bodies[data.selectedBodyIndex]) ? bodies[data.selectedBodyIndex] : null;
   impactEvents = [];
+  hoverBody = null;
+
+  if (data.catType && typeof data.catType === 'object') {
+    for (const k of CATEGORY_KEYS) {
+      const v = data.catType[k];
+      if (typeof v === 'string' && Object.prototype.hasOwnProperty.call(CATEGORIES[k].types, v)) catType[k] = v;
+    }
+  }
+  setMode(isMode(data.mode) ? data.mode : 'star');
+  setHabitableZone(!!data.showHabitableZone);
+  setSpeed(numOr(data.speed, 1));
+  setSizeMul(numOr(data.sizeMul, 1));
+  setMotion(data.placeMotion === 'static' ? 'static' : 'orbit');
+
+  selectedBody = (Number.isInteger(data.selectedBodyIndex) && bodies[data.selectedBodyIndex])
+    ? bodies[data.selectedBodyIndex] : null;
+
   computeAccel();
   /* ★ 加载存档后立即锁定 E0 基准，不走延迟 */
   E0 = totalEnergy();
   __e0Initialized = true;
   __e0Pending = false; __e0DelayTimer = 0;
   __lastEnergyCalc = -1;
-  document.getElementById('btnPause').textContent = paused ? '继续' : '暂停';
+  __lastEnergyText = '—';
+  setPaused(!!data.paused);
   lastT = performance.now();
 }
 
@@ -1628,10 +1785,20 @@ function saveCurrent() {
   if (!currentSaveId) { saveAsNew(); return; }
   const save = saves.find(s => s.id === currentSaveId);
   if (!save) { saveAsNew(); return; }
-  save.state = serializeState();
+  let state;
+  try { state = serializeState(); }
+  catch (e) { showToast('保存失败：' + e.message, true); return; }
+
+  const prevState = save.state, prevAt = save.savedAt;
+  save.state = state;
   save.savedAt = Date.now();
   if (writeSavesToStorage()) {
     showToast('已保存：' + save.name);
+    renderSaveList();
+  } else {
+    /* ★ 修复：写盘失败就把内存回滚，否则列表时间变了、内容却没存上 */
+    save.state = prevState;
+    save.savedAt = prevAt;
     renderSaveList();
   }
 }
@@ -1641,7 +1808,10 @@ function saveAsNew() {
   const name = prompt('另存为新存档，起个名字：', defaultName);
   if (name === null) return;
   const finalName = (name || '').trim() || defaultName;
-  const save = { id: genId(), name: finalName, savedAt: Date.now(), state: serializeState() };
+  let state;
+  try { state = serializeState(); }
+  catch (e) { showToast('保存失败：' + e.message, true); return; }
+  const save = { id: genId(), name: finalName, savedAt: Date.now(), state };
   saves.push(save);
   if (writeSavesToStorage()) {
     currentSaveId = save.id;
@@ -1650,25 +1820,31 @@ function saveAsNew() {
   } else { saves.pop(); }
 }
 
+/* ★ 重置模拟与界面：新建宇宙 / 退出首页 共用，避免各自漏重置
+   （以前这里漏了 paused，暂停后退出再新建会得到一个"冻住"的宇宙） */
+function clearSimulation() {
+  resetWorldState();
+  setPaused(false);
+  setSpeed(1);
+  setSizeMul(1);
+  setMotion('orbit');
+  setMode('star');
+  setHabitableZone(false);
+  hud.innerHTML = '';
+}
+
 function createEmptyUniverse() {
   const defaultName = '新宇宙 ' + new Date().toLocaleString('zh-CN', { hour12: false });
   const name = prompt('给这个新宇宙起个名字：', defaultName);
   if (name === null) return;
   const finalName = (name || '').trim() || defaultName;
 
-  bodies = [];
-  impactEvents = [];
-  selectedBody = null;
-  simTime = 0; prevSimTime = 0;
-  nextSample = SAMPLE_DT; acc = 0; E0 = 0;
-  __e0Initialized = false; __e0Pending = false; __e0DelayTimer = 0;
-  __lastEnergyCalc = -1;
-  camX = 0; camY = 0; camScale = 220;
-  camTarget.x = 0; camTarget.y = 0; camTarget.s = 220;
-  userZoom = 1; userPanX = 0; userPanY = 0;
-  smoothMaxD = 0.6;
+  clearSimulation();
 
-  const save = { id: genId(), name: finalName, savedAt: Date.now(), state: serializeState() };
+  let state;
+  try { state = serializeState(); }
+  catch (e) { showToast('创建失败：' + e.message, true); return; }
+  const save = { id: genId(), name: finalName, savedAt: Date.now(), state };
   saves.push(save);
   if (writeSavesToStorage()) {
     showToast('已创建：' + finalName);
@@ -1696,8 +1872,13 @@ function deleteSave(id) {
   const save = saves[idx];
   if (!confirm(`确定删除「${save.name}」吗？此操作不可撤销。`)) return;
   saves.splice(idx, 1);
+  if (!writeSavesToStorage()) {
+    /* ★ 修复：写盘失败就把它放回去，否则界面删掉了、刷新后又"复活" */
+    saves.splice(idx, 0, save);
+    renderSaveList();
+    return;
+  }
   if (currentSaveId === id) currentSaveId = null;
-  writeSavesToStorage();
   renderSaveList();
   showToast('已删除：' + save.name);
 }
@@ -1779,7 +1960,12 @@ function importSaveFromFile(file) {
       else if (data && data.state && data.state.bodies) save = data;
       else throw new Error('文件格式不正确');
       if (!save.state || !Array.isArray(save.state.bodies)) throw new Error('存档内容损坏');
-      const newSave = { id: genId(), name: (save.name || '导入的存档').toString().slice(0, 60), savedAt: Date.now(), state: save.state };
+      const newSave = {
+        id: genId(),
+        name: (save.name || '导入的存档').toString().trim().slice(0, 60) || '导入的存档',
+        savedAt: Date.now(),
+        state: save.state,
+      };
       saves.push(newSave);
       if (writeSavesToStorage()) {
         renderSaveList();
@@ -1860,19 +2046,20 @@ function renderSaveList() {
 
 function openSaveModal(isStartup) {
   const modal = document.getElementById('saveModal');
-  const title = document.getElementById('modalTitle');
+  /* ★ 修复：不再依赖 title.childNodes[0] 是文本节点这种脆弱结构 */
+  const heading = document.getElementById('modalHeading');
   const subtitle = document.getElementById('modalSubtitle');
   const newBtn = document.getElementById('btnNewSave');
   const closeBtn = document.getElementById('modalClose');
   if (isStartup) {
     modal.classList.add('startup');
-    title.childNodes[0].nodeValue = '🌌 宇宙模拟器';
+    heading.textContent = '🌌 宇宙模拟器';
     subtitle.textContent = '选择一个存档加载，或新建一个宇宙开始';
     newBtn.textContent = '＋ 新建宇宙';
     closeBtn.style.display = 'none';
   } else {
     modal.classList.remove('startup');
-    title.childNodes[0].nodeValue = '💾 存档管理';
+    heading.textContent = '💾 存档管理';
     subtitle.textContent = '当前存档会自动覆盖，其他存档可加载或另存';
     newBtn.textContent = '＋ 另存为新存档';
     closeBtn.style.display = '';
@@ -1882,13 +2069,13 @@ function openSaveModal(isStartup) {
 }
 
 function closeSaveModal() { document.getElementById('saveModal').classList.remove('open'); }
-
 function enterGame(saveId) {
   inGame = true;
   if (saveId) currentSaveId = saveId;
   document.body.classList.add('in-game');
   closeSaveModal();
   lastT = performance.now();
+  updateHUD();
 }
 
 document.getElementById('btnOpenSave').addEventListener('click', ev => {
@@ -1981,9 +2168,9 @@ function buildTypeButtons() {
 }
 
 function setMode(m) {
-  mode = m;
+  mode = isMode(m) ? m : 'star';
   for (const k in modeBtns) {
-    if (modeBtns[k]) modeBtns[k].classList.toggle('active', k === m);
+    if (modeBtns[k]) modeBtns[k].classList.toggle('active', k === mode);
   }
   buildTypeButtons();
   updateCursor();
@@ -1993,7 +2180,11 @@ function bindButton(id, handler) {
   const el = document.getElementById(id);
   if (!el) return;
   el.addEventListener('click', function(ev){
-    ev.stopPropagation(); ev.preventDefault(); handler(ev);
+    ev.stopPropagation();
+    ev.preventDefault();
+    handler(ev);
+    /* ★ 修复：点完按钮后把焦点还给页面，否则空格/数字键会被按钮吞掉 */
+    if (el.blur) el.blur();
   });
   el.addEventListener('pointerdown', function(ev){ ev.stopPropagation(); });
   el.addEventListener('touchstart', function(ev){ ev.stopPropagation(); }, {passive:true});
@@ -2006,46 +2197,23 @@ bindButton('modeSatellite', () => setMode('satellite'));
 bindButton('modeFollow',    () => setMode('follow'));
 bindButton('modeDelete',    () => setMode('delete'));
 
-bindButton('motOrbit', () => {
-  placeMotion = 'orbit';
-  document.getElementById('motOrbit').classList.add('active');
-  document.getElementById('motStatic').classList.remove('active');
-});
-bindButton('motStatic', () => {
-  placeMotion = 'static';
-  document.getElementById('motStatic').classList.add('active');
-  document.getElementById('motOrbit').classList.remove('active');
-});
+bindButton('motOrbit', () => setMotion('orbit'));
+bindButton('motStatic', () => setMotion('static'));
 
-document.getElementById('size').addEventListener('input', e => {
-  sizeMul = parseFloat(e.target.value);
-  document.getElementById('sizeVal').textContent = sizeMul.toFixed(1) + '×';
-});
-document.getElementById('speed').addEventListener('input', e => {
-  speed = parseFloat(e.target.value);
-  document.getElementById('speedVal').textContent = speed.toFixed(1) + '×';
-});
+document.getElementById('size').addEventListener('input', e => setSizeMul(e.target.value));
+document.getElementById('speed').addEventListener('input', e => setSpeed(e.target.value));
 
-bindButton('btnHabitable', () => {
-  showHabitableZone = !showHabitableZone;
-  document.getElementById('btnHabitable').classList.toggle('active', showHabitableZone);
-});
+bindButton('btnHabitable', () => setHabitableZone(!showHabitableZone));
 
 bindButton('btnPause', () => { togglePause(); });
 
 bindButton('btnResetView', () => { resetView(); selectedBody = null; });
 
 bindButton('btnClear', () => {
-  bodies = [];
-  impactEvents = [];
-  selectedBody = null;
-  simTime = 0; prevSimTime = 0;
-  nextSample = SAMPLE_DT; acc = 0; E0 = 0;
-  __e0Initialized = false; __e0Pending = false; __e0DelayTimer = 0;
-  __lastEnergyCalc = -1;
-  hoverBody = null;
-  resetView();
-  lastT = performance.now();
+  /* ★ 修复：清空是不可撤销操作，先确认 */
+  if (bodies.length && !confirm('确定清空当前宇宙的全部天体吗？此操作不可撤销。')) return;
+  resetWorldState();
+  showToast('已清空');
 });
 
 /* ---- 退出到首页（不保存） ---- */
@@ -2053,22 +2221,10 @@ function exitToHome() {
   if (inGame) {
     if (!confirm('确定退出到首页吗？未保存的内容会丢失。')) return;
   }
-  bodies = [];
-  impactEvents = [];
-  selectedBody = null;
-  simTime = 0; prevSimTime = 0;
-  nextSample = SAMPLE_DT; acc = 0; E0 = 0;
-  __e0Initialized = false; __e0Pending = false; __e0DelayTimer = 0;
-  __lastEnergyCalc = -1;
-  camX = 0; camY = 0; camScale = 220;
-  camTarget.x = 0; camTarget.y = 0; camTarget.s = 220;
-  userZoom = 1; userPanX = 0; userPanY = 0;
-  smoothMaxD = 0.6;
   inGame = false;
   currentSaveId = null;
   document.body.classList.remove('in-game');
-  hoverBody = null;
-  mouseX = -1; mouseY = -1;
+  clearSimulation();
   openSaveModal(true);
   lastT = performance.now();
 }
@@ -2076,8 +2232,12 @@ bindButton('btnExit', exitToHome);
 
 /* ===================== 键盘快捷键 ===================== */
 window.addEventListener('keydown', e => {
-  const tag = (e.target && e.target.tagName ? e.target.tagName : '').toUpperCase();
-  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'BUTTON') return;
+  const el = e.target;
+  const tag = (el && el.tagName ? el.tagName : '').toUpperCase();
+  /* ★ 修复：以前把 BUTTON 也排除在外 —— 只要点过一次面板按钮，焦点就停在
+     按钮上，之后空格 / R / H / 1-6 / 方向键 全部失效。文本输入框才需要排除。 */
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' ||
+      tag === 'OPTION' || (el && el.isContentEditable)) return;
   const modalOpen = document.getElementById('saveModal').classList.contains('open');
   const isStartup = document.getElementById('saveModal').classList.contains('startup');
   if (isStartup) return;
@@ -2091,8 +2251,7 @@ window.addEventListener('keydown', e => {
   if (key === ' ') { e.preventDefault(); togglePause(); return; }
   if (key === 'r' || key === 'R') { resetView(); selectedBody = null; return; }
   if (key === 'h' || key === 'H') {
-    showHabitableZone = !showHabitableZone;
-    document.getElementById('btnHabitable').classList.toggle('active', showHabitableZone);
+    setHabitableZone(!showHabitableZone);
     return;
   }
   if ((key === 's' || key === 'S') && (e.ctrlKey || e.metaKey)) {
@@ -2127,11 +2286,23 @@ let isGesturing = false;
 
 function refreshGesturing() { isGesturing = activePointers.size > 0; }
 
+/* ★ 修复：指针状态必须能被强制清空，否则一次丢失的 pointerup 会让
+   isGesturing 永远为 true，相机从此不再跟随（画面像卡死） */
+function clearPointerState() {
+  activePointers.clear();
+  panState = null;
+  pinchState = null;
+  refreshGesturing();
+  updateCursor();
+}
+
 canvas.addEventListener('contextmenu', e => e.preventDefault());
 
 canvas.addEventListener('pointerdown', e => {
   if (!inGame) return;
   if (e.target !== canvas) return;
+  /* ★ 捕获指针：拖出窗口再松手也能收到 pointerup */
+  try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
   const isPanButton = (e.button === 1 || e.button === 2);
   activePointers.set(e.pointerId, {
     id: e.pointerId, button: e.button,
@@ -2204,14 +2375,21 @@ canvas.addEventListener('pointermove', e => {
   }
 });
 
-function releasePointer(e) {
+function releasePointer(e, cancelled) {
   const p = activePointers.get(e.pointerId);
   if (!p) return;
   activePointers.delete(e.pointerId);
+  try {
+    if (canvas.hasPointerCapture && canvas.hasPointerCapture(e.pointerId)) {
+      canvas.releasePointerCapture(e.pointerId);
+    }
+  } catch (_) {}
   refreshGesturing();
   updateCursor();
 
-  if (p && !p.moved && !p.isPan && activePointers.size === 0 &&
+  /* ★ 修复：pointercancel 表示手势被系统/浏览器中断，不能再当成一次点击，
+     否则会在 (0,0) 附近莫名其妙丢下一个天体 */
+  if (!cancelled && p && !p.moved && !p.isPan && activePointers.size === 0 &&
       performance.now() - p.startTime < 500 && inGame) {
     handleClick(e.clientX, e.clientY);
   }
@@ -2225,8 +2403,15 @@ function releasePointer(e) {
   }
 }
 
-canvas.addEventListener('pointerup', releasePointer);
-canvas.addEventListener('pointercancel', releasePointer);
+canvas.addEventListener('pointerup', e => releasePointer(e, false));
+canvas.addEventListener('pointercancel', e => releasePointer(e, true));
+/* ★ 兜底：指针在画布外抬起 / 窗口失焦时也清理状态 */
+window.addEventListener('pointerup', e => releasePointer(e, false));
+window.addEventListener('pointercancel', e => releasePointer(e, true));
+window.addEventListener('blur', clearPointerState);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) clearPointerState();
+});
 
 function handleClick(px, py) {
   if (mode === 'delete') {
@@ -2244,7 +2429,8 @@ function handleClick(px, py) {
   const wy = camY - (py - H * 0.5) / camScale;
   if (mode === 'satellite') {
     const host = findHostForSatellite(px, py);
-    if (!host) return;
+    /* ★ 修复：找不到宿主时给个提示，不再静默失败 */
+    if (!host) { showToast('请点在恒星或行星附近再放卫星', true); return; }
     placeBody('satellite', catType.satellite, sizeMul, wx, wy, 'orbit', host);
   } else {
     placeBody(mode, catType[mode], sizeMul, wx, wy, placeMotion);
@@ -2277,6 +2463,28 @@ canvas.addEventListener('pointerleave', e => {
   if (e.pointerType === 'mouse') { mouseX = -1; mouseY = -1; hoverBody = null; }
 });
 
+/* ===================== 世界状态重置 ===================== */
+/* ★ 只重置世界/相机/模拟，不动用户当前选择的 模式 / 速度 / 大小 / 暂停 */
+function resetWorldState() {
+  bodies = [];
+  impactEvents = [];
+  selectedBody = null;
+  hoverBody = null;
+  mouseX = -1; mouseY = -1;
+  simTime = 0; prevSimTime = 0;
+  nextSample = SAMPLE_DT; acc = 0; E0 = 0;
+  cachedMinD = Infinity;
+  stepsSinceImpactCheck = 0;
+  __e0Initialized = false; __e0Pending = false; __e0DelayTimer = 0;
+  __lastEnergyCalc = -1; __lastEnergyText = '—';
+  camX = 0; camY = 0; camScale = 220;
+  camTarget.x = 0; camTarget.y = 0; camTarget.s = 220;
+  userZoom = 1; userPanX = 0; userPanY = 0;
+  smoothMaxD = 0.6;
+  clearPointerState();
+  lastT = performance.now();
+}
+
 /* ===================== 主循环 ===================== */
 function frame(now) {
   requestAnimationFrame(frame);
@@ -2290,7 +2498,7 @@ function frame(now) {
     const maxStepsThisFrame = Math.min(MAX_STEPS, Math.ceil(acc / BASE_STEP) + 5);
     let steps = 0;
     let mergeCount = 0;
-    
+
     while (acc >= BASE_STEP && steps < maxStepsThisFrame) {
       if (cachedMinD < OVERLAP_CHECK_DIST && mergeCount < 20) {
         if (checkOverlapMerge()) {
@@ -2345,9 +2553,11 @@ function frame(now) {
 
 /* ===================== 启动 ===================== */
 resize();
+setSpeed(1);
+setSizeMul(1);
+setMotion('orbit');
+setPaused(false);
 setMode('star');
-buildTypeButtons();
-updateCursor();
 loadSavesFromStorage();
 openSaveModal(true);
 requestAnimationFrame(frame);
