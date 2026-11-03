@@ -33,11 +33,50 @@
     display: flex; flex-direction: column; gap: 6px;
     z-index: 1000;
     padding: 8px;
-    background: rgba(6, 9, 14, 0.72);
+    background-color: rgba(6, 9, 14, 0.72);
     border: 1px solid #1a2332;
     border-radius: 12px;
     backdrop-filter: blur(6px);
     -webkit-backdrop-filter: blur(6px);
+    transition: transform 0.3s ease, background-color 0.3s ease,
+                border-color 0.3s ease;
+  }
+  .panel > .row {
+    transition: opacity 0.2s ease;
+  }
+  /* 面板右上角的小切换按钮（纯 UI，不参与画布手势） */
+  .panel-toggle {
+    position: absolute;
+    top: 4px; right: 8px;
+    width: 40px; height: 22px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 7px;
+    font-size: 10px;
+    line-height: 1;
+    z-index: 2;
+  }
+  /* 给右上角的切换按钮让出位置，避免遮住第一行按钮 */
+  .panel > .row:first-of-type {
+    padding-right: 48px;
+  }
+  /* 收起：只保留顶部 30px，按钮仍可点击；其余区域完全让给画布 */
+  .panel.collapsed {
+    transform: translateY(calc(100% - 30px));
+    background-color: transparent;
+    border-color: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    pointer-events: none;
+  }
+  .panel.collapsed > .row {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .panel.collapsed .panel-toggle {
+    pointer-events: auto;
   }
   .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
   button {
@@ -297,7 +336,11 @@
 
 <button class="save-btn-fixed save-btn" id="btnOpenSave">💾 存档管理</button>
 
-<div class="panel">
+<div class="panel" id="controlPanel">
+  <button class="panel-toggle" id="btnPanelToggle" type="button"
+          title="收起面板" aria-label="收起面板" aria-controls="controlPanel"
+          aria-expanded="true">▼</button>
+
   <div class="row">
     <span class="lbl">模式</span>
     <button id="modeStar" class="active" title="快捷键 1">✦ 恒星</button>
@@ -2781,6 +2824,31 @@ function exitToHome() {
   lastT = performance.now();
 }
 bindButton('btnExit', exitToHome);
+
+/* ---- 底部控制面板：收起 / 展开（纯 UI，不触碰物理、相机与渲染） ---- */
+const controlPanel = document.getElementById('controlPanel');
+const btnPanelToggle = document.getElementById('btnPanelToggle');
+function setPanelCollapsed(collapsed) {
+  controlPanel.classList.toggle('collapsed', collapsed);
+  btnPanelToggle.textContent = collapsed ? '▲' : '▼';
+  btnPanelToggle.setAttribute('aria-expanded', String(!collapsed));
+  btnPanelToggle.setAttribute('aria-label', collapsed ? '展开控制面板' : '收起控制面板');
+  btnPanelToggle.title = collapsed ? '展开控制面板' : '收起控制面板';
+}
+btnPanelToggle.addEventListener('pointerdown', function (ev) {
+  ev.stopPropagation();
+});
+btnPanelToggle.addEventListener('touchstart', function (ev) {
+  ev.stopPropagation();
+}, { passive: true });
+btnPanelToggle.addEventListener('click', function (ev) {
+  /* 阻止事件继续传播，避免触碰到画布上的落子 / 手势逻辑 */
+  ev.stopPropagation();
+  ev.preventDefault();
+  setPanelCollapsed(!controlPanel.classList.contains('collapsed'));
+  /* 与面板其他按钮一致：操作后归还焦点，避免空格等快捷键被按钮吞掉 */
+  if (btnPanelToggle.blur) btnPanelToggle.blur();
+});
 
 /* ===================== 键盘快捷键 ===================== */
 window.addEventListener('keydown', e => {
